@@ -1,48 +1,55 @@
-import os
+from flask import Flask, request, jsonify
 import smtplib
-from flask import Flask, request
 from email.mime.text import MIMEText
-from email.header import Header
+import os
 
 app = Flask(__name__)
 
+# 通用函数：通过SMTP发送邮件
+def send_email_via_smtp(subject, body):
+    sender_email = os.environ.get('EMAIL_ADDRESS_QQ')
+    sender_password = os.environ.get('EMAIL_PASSWORD_QQ')
+    receiver_email = os.environ.get('FORWARD_EMAIL')
 
-@app.route("/", methods=["POST", "GET"])
-def home():
-    print("✅ Received request at /")
+    if not all([sender_email, sender_password, receiver_email]):
+        raise ValueError("❌ 环境变量未正确设置！")
 
-    # 只在 POST 请求时发送邮件
-    if request.method == "POST":
-        send_email()
+    # 构造邮件
+    message = MIMEText(body, 'plain', 'utf-8')
+    message['From'] = sender_email
+    message['To'] = receiver_email
+    message['Subject'] = subject
 
-    return "✅ Cloud Run is working!", 200
+    # 使用SMTP_SSL连接QQ邮箱
+    server = smtplib.SMTP_SSL('smtp.qq.com', 465)
+    server.login(sender_email, sender_password)
+    server.sendmail(sender_email, [receiver_email], message.as_string())
+    server.quit()
 
+    print("✅ 邮件发送成功")
 
-def send_email():
-    try:
-        smtp_server = 'smtp.qq.com'
-        smtp_port = 465
-        sender_email = os.environ.get('EMAIL_ADDRESS_QQ')
-        sender_password = os.environ.get('EMAIL_PASSWORD_QQ')
-        receiver_email = os.environ.get('FORWARD_EMAIL')
+# 接收Pub/Sub推送
+@app.route('/', methods=['POST'])
+def receive_pubsub():
+    envelope = request.get_json()
+    if not envelope:
+        return 'Bad Request: No JSON', 400
 
-        print(f"✅ 准备发邮件：From {sender_email} To {receiver_email}")
+    print(f"✅ 收到Pub/Sub消息：{envelope}")
 
-        subject = '📬 Cloud Run通知'
-        body = '✅ 您的Cloud Run服务收到了一个新请求！'
+    # 收到消息后发送一封邮件
+    send_email_via_smtp(
+        subject="📬 新邮件触发通知",
+        body="你收到了新的邮件通知！（由Cloud Run自动发送）"
+    )
 
-        # 构建邮件
-        message = MIMEText(body, 'plain', 'utf-8')
-        message['From'] = Header("Cloud Run Service", 'utf-8')
-        message['To'] = Header(receiver_email, 'utf-8')
-        message['Subject'] = Header(subject, 'utf-8')
+    return 'OK', 200
 
-        # 连接并发送邮件
-        smtp = smtplib.SMTP_SSL(smtp_server, smtp_port)
-        smtp.login(sender_email, sender_password)
-        smtp.sendmail(sender_email, [receiver_email], message.as_string())
-        smtp.quit()
+# 保留的刷新接口（占位）
+@app.route('/refresh', methods=['POST'])
+def manual_refresh():
+    print("✅ 手动触发了刷新接口（当前没有实际刷新操作）")
+    return '手动刷新成功', 200
 
-        print("✅ 邮件发送成功！")
-    except Exception as e:
-        print(f"❌ 邮件发送失败: {e}")
+if __name__ == '__main__':
+    app.run(port=8080)
