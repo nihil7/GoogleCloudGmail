@@ -11,16 +11,23 @@ def send_email_via_smtp(subject, body):
     sender_password = os.environ.get('EMAIL_PASSWORD_QQ')
     receiver_email = os.environ.get('FORWARD_EMAIL')
 
-    if not all([sender_email, sender_password, receiver_email]):
-        raise ValueError("❌ 环境变量未正确设置！")
+    missing_vars = []
+    if not sender_email:
+        missing_vars.append('EMAIL_ADDRESS_QQ')
+    if not sender_password:
+        missing_vars.append('EMAIL_PASSWORD_QQ')
+    if not receiver_email:
+        missing_vars.append('FORWARD_EMAIL')
 
-    # 构造邮件
+    if missing_vars:
+        raise ValueError(f"❌ 缺少以下环境变量: {', '.join(missing_vars)}")
+
+    # 下面是正常发邮件逻辑
     message = MIMEText(body, 'plain', 'utf-8')
     message['From'] = sender_email
     message['To'] = receiver_email
     message['Subject'] = subject
 
-    # 使用SMTP_SSL连接QQ邮箱
     server = smtplib.SMTP_SSL('smtp.qq.com', 465)
     server.login(sender_email, sender_password)
     server.sendmail(sender_email, [receiver_email], message.as_string())
