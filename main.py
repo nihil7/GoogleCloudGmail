@@ -7,7 +7,7 @@ from email_sender import send_email
 app = Flask(__name__)
 
 # 配置区
-SEND_FIRST_NOTIFICATION = True  # 是否发送第一封【收到推送】邮件（True=发送，False=不发）
+SEND_FIRST_NOTIFICATION = False  # 是否发送第一封【收到推送】邮件（True=发送，False=不发）
 
 @app.route('/', methods=['POST'])
 def receive_pubsub():
