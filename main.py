@@ -2,6 +2,8 @@ from flask import Flask, request, jsonify
 import smtplib
 from email.mime.text import MIMEText
 import os
+import base64
+import json
 
 app = Flask(__name__)
 
@@ -22,7 +24,6 @@ def send_email_via_smtp(subject, body):
     if missing_vars:
         raise ValueError(f"❌ 缺少以下环境变量: {', '.join(missing_vars)}")
 
-    # 下面是正常发邮件逻辑
     message = MIMEText(body, 'plain', 'utf-8')
     message['From'] = sender_email
     message['To'] = receiver_email
@@ -35,27 +36,37 @@ def send_email_via_smtp(subject, body):
 
     print("✅ 邮件发送成功")
 
-# 接收Pub/Sub推送
 @app.route('/', methods=['POST'])
 def receive_pubsub():
     envelope = request.get_json()
     if not envelope:
         return 'Bad Request: No JSON', 400
 
-    print(f"✅ 收到Pub/Sub消息：{envelope}")
+    print(f"✅ 收到Pub/Sub消息（原始）：{envelope}")
 
-    # 收到消息后发送一封邮件
-    send_email_via_smtp(
-        subject="📬 新邮件触发通知",
-        body="你收到了新的邮件通知！（由Cloud Run自动发送）"
-    )
+    decoded_json = {}
+    if 'message' in envelope and 'data' in envelope['message']:
+        data_b64 = envelope['message']['data']
+        try:
+            decoded_bytes = base64.urlsafe_b64decode(data_b64)
+            decoded_str = decoded_bytes.decode('utf-8')
+            decoded_json = json.loads(decoded_str)
+            print(f"✅ 解码后的内容：{decoded_json}")
+        except Exception as e:
+            print(f"❌ 解码出错: {str(e)}")
+    else:
+        print("⚠️ Pub/Sub推送消息中缺少'message'或'data'字段")
+
+    # 发一封提醒邮件
+    email_subject = "📬 新邮件触发通知"
+    email_body = f"收到新的Pub/Sub推送内容：\n\n{json.dumps(decoded_json, ensure_ascii=False, indent=2)}"
+    send_email_via_smtp(subject=email_subject, body=email_body)
 
     return 'OK', 200
 
-# 保留的刷新接口（占位）
 @app.route('/refresh', methods=['POST'])
 def manual_refresh():
-    print("✅ 手动触发了刷新接口（当前没有实际刷新操作）")
+    print("✅ 手动触发了刷新接口（当前没有实际刷新逻辑）")
     return '手动刷新成功', 200
 
 if __name__ == '__main__':
