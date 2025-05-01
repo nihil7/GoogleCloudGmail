@@ -42,7 +42,7 @@ def receive_pubsub():
         # ✅ 获取新增邮件 (msg_id, subject) 清单
         new_messages = detect_new_messages_only(history_id)  # 返回 List[Tuple[str, str]]
 
-        # ✅ 筛选关键词“对账单”，并发送邮件通知（如匹配）
+        # ✅ 筛选关键词“对账”，并发送邮件通知（如匹配）
         notify_if_subject_contains_keyword(new_messages, keyword="对账")
 
         return 'OK', 200
@@ -213,12 +213,25 @@ def detect_new_messages_only(current_history_id: str):
 def notify_if_subject_contains_keyword(message_list: list, keyword: str):
     """
     筛选新邮件列表，若有主题包含关键词，则发送提醒邮件。
-    :param message_list: List[Tuple[str, str]] - 每项为 (msg_id, subject)
-    :param keyword: 要匹配的关键词（如“对账单”）
+    :param message_list: List[Tuple[str, str]] or List[dict] - 每项为 (msg_id, subject) 或 {"id":..., "subject":...}
+    :param keyword: 要匹配的关键词（如“对账”）
     """
     try:
-        # 筛选匹配的邮件
-        matched = [(msg_id, subject) for msg_id, subject in message_list if keyword in subject]
+        # 统一转换为 (msg_id, subject) 格式
+        normalized = []
+        for item in message_list:
+            if isinstance(item, dict):
+                msg_id = item.get("id") or item.get("messageId") or item.get("message_id")
+                subject = item.get("subject", "")
+                if msg_id and subject:
+                    normalized.append((msg_id, subject))
+            elif isinstance(item, (tuple, list)) and len(item) == 2:
+                normalized.append((item[0], item[1]))
+            else:
+                logging.warning(f"⚠️ 无法识别的消息项结构：{item}")
+
+        # 筛选匹配项
+        matched = [(msg_id, subject) for msg_id, subject in normalized if keyword in subject]
 
         if not matched:
             logging.info(f"📭 未发现包含关键词“{keyword}”的邮件，跳过通知")
@@ -229,7 +242,6 @@ def notify_if_subject_contains_keyword(message_list: list, keyword: str):
         for idx, (msg_id, subject) in enumerate(matched, 1):
             body_lines.append(f"{idx}. 📧 主题: {subject}\n   🆔 ID: {msg_id}")
         body = "\n".join(body_lines)
-
         email_subject = f"📌 Gmail 新邮件提醒：包含“{keyword}”"
 
         # 获取环境变量
@@ -256,6 +268,7 @@ def notify_if_subject_contains_keyword(message_list: list, keyword: str):
 
     except Exception as e:
         logging.exception(f"❌ 邮件提醒发送失败：{e}")
+
 
 
 
