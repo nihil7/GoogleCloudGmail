@@ -3,10 +3,12 @@ import base64
 import json
 import os
 import logging
-from email_sender import send_email
 from google.cloud import secretmanager
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+import smtplib
+from email.mime.text import MIMEText
+
 
 app = Flask(__name__)
 
@@ -58,20 +60,39 @@ def handle_pubsub_message(envelope: dict) -> dict:
     logging.info(f"📨 解码后的消息内容：{decoded_json}")
     return decoded_json
 
-# === 函数：转发原始消息内容 ===
+
+# === 函数：转发原始消息内容（含发件逻辑） ===
 def forward_pubsub_message_email(decoded_json: dict):
     """将 Gmail 推送的原始 JSON 内容作为邮件正文发送"""
+
     content = json.dumps(decoded_json, ensure_ascii=False, indent=2)
     logging.info("📄 已准备邮件内容")
 
-    if ENABLE_EMAIL_SENDING:
-        try:
-            send_email(subject="📬 Gmail 推送原始内容", body=content)
-            logging.info("✅ 邮件已发送（原始推送）")
-        except Exception:
-            logging.exception("❌ 邮件发送失败")
-    else:
-        logging.info("🚫 邮件发送功能关闭，未调用 send_email()")
+    if not os.environ.get('EMAIL_ADDRESS_QQ') or not os.environ.get('EMAIL_PASSWORD_QQ') or not os.environ.get('FORWARD_EMAIL'):
+        logging.warning("⚠️ 缺少邮件环境变量，跳过发送")
+        return
+
+    if not ENABLE_EMAIL_SENDING:
+        logging.info("🚫 邮件发送功能关闭，未调用发送")
+        return
+
+    sender_email = os.environ.get('EMAIL_ADDRESS_QQ')
+    sender_password = os.environ.get('EMAIL_PASSWORD_QQ')
+    receiver_email = os.environ.get('FORWARD_EMAIL')
+
+    message = MIMEText(content, 'plain', 'utf-8')
+    message['From'] = sender_email
+    message['To'] = receiver_email
+    message['Subject'] = "📬 Gmail 推送原始内容"
+
+    try:
+        server = smtplib.SMTP_SSL('smtp.qq.com', 465)
+        server.login(sender_email, sender_password)
+        server.sendmail(sender_email, [receiver_email], message.as_string())
+        server.quit()
+        logging.info("✅ 邮件已发送（原始推送）")
+    except Exception as e:
+        logging.exception(f"❌ 邮件发送失败：{e}")
 
 # === 辅助函数：读取上一次 historyId ===
 def read_previous_history_id() -> str:
@@ -196,6 +217,7 @@ def detect_label_addition(current_history_id: str, target_label: str) -> bool:
         logging.exception("❌ 查询变更记录失败")
         return False
 
+
 # === 函数：根据标签变更决定是否发送邮件通知 ===
 def notify_if_label_matched(matched: bool, label: str, history_id: str):
     """根据匹配结果和开关配置决定是否发通知邮件"""
@@ -203,15 +225,35 @@ def notify_if_label_matched(matched: bool, label: str, history_id: str):
         if matched and ENABLE_NOTIFY_ON_LABEL:
             subject = f"📌 标签 [{label}] 已添加"
             body = f"收到 Gmail 推送，并发现有邮件添加了标签：{label}\n\n对应 historyId: {history_id}"
-            send_email(subject=subject, body=body)
+
+            sender_email = os.environ.get('EMAIL_ADDRESS_QQ')
+            sender_password = os.environ.get('EMAIL_PASSWORD_QQ')
+            receiver_email = os.environ.get('FORWARD_EMAIL')
+
+            if not all([sender_email, sender_password, receiver_email]):
+                logging.warning("⚠️ 缺少邮件环境变量，跳过发送")
+                return
+
+            message = MIMEText(body, 'plain', 'utf-8')
+            message['From'] = sender_email
+            message['To'] = receiver_email
+            message['Subject'] = subject
+
+            server = smtplib.SMTP_SSL('smtp.qq.com', 465)
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, [receiver_email], message.as_string())
+            server.quit()
+
             logging.info("✅ 标签通知邮件已发送")
+
         elif matched:
             logging.info("☑️ 匹配标签，但邮件提醒已关闭")
         else:
             logging.info("📭 未发现匹配标签")
 
-    except Exception:
-        logging.exception("❌ 标签通知邮件发送失败")
+    except Exception as e:
+        logging.exception(f"❌ 标签通知邮件发送失败：{e}")
+
 
 # === 本地调试入口 ===
 if __name__ == '__main__':
