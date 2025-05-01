@@ -1,0 +1,75 @@
+from flask import Flask, request
+import base64
+import json
+import os
+
+from gmail_history_handler import fetch_and_analyze_history
+from email_sender import send_email
+
+app = Flask(__name__)
+
+# 配置区域
+TARGET_LABEL_NAME = "0"        # Gmail 监控标签
+PRINT_LABEL_MAP = True         # 是否打印标签映射
+SEND_IF_EMPTY = False          # 内容为空是否也发送邮件
+
+
+def handle_pubsub_message(envelope: dict) -> dict:
+    """
+    第1阶段：解析 Pub/Sub 推送消息，并返回解码后的 JSON 数据
+    """
+    if not envelope or 'message' not in envelope or 'data' not in envelope['message']:
+        raise ValueError("⚠️ Pub/Sub 格式错误")
+
+    # 解码 base64 消息体
+    data_b64 = envelope['message']['data']
+    decoded_str = base64.urlsafe_b64decode(data_b64).decode('utf-8')
+    decoded_json = json.loads(decoded_str)
+
+    print(f"📨 解码后的消息内容：{decoded_json}")
+    return decoded_json
+
+
+def handle_gmail_analysis(history_id: str):
+    """
+    第2阶段：分析 Gmail 内容，并根据内容决定是否发送邮件
+    """
+    content = fetch_and_analyze_history(
+        history_id,
+        label=TARGET_LABEL_NAME,
+        print_map=PRINT_LABEL_MAP
+    )
+
+    if content or SEND_IF_EMPTY:
+        send_email(subject="📬 Gmail 更新内容", body=content or "📭 无更新内容")
+        print("✅ 邮件已发送")
+    else:
+        print("ℹ️ 无需发送邮件（内容为空）")
+
+
+@app.route('/', methods=['POST'])
+def receive_pubsub():
+    """
+    Flask 路由主入口：处理 Gmail 推送请求
+    """
+    try:
+        envelope = request.get_json()
+        decoded_json = handle_pubsub_message(envelope)
+
+        history_id = decoded_json.get("historyId")
+        if not history_id:
+            print("⚠️ 未提供 historyId，跳过处理")
+            return 'OK', 200
+
+        print(f"📌 收到 historyId: {history_id}")
+        handle_gmail_analysis(history_id)
+        return 'OK', 200
+
+    except Exception as e:
+        print(f"❌ 错误：{str(e)[:280]}")
+        return 'Internal Server Error', 500
+
+
+# 本地测试入口
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))

@@ -42,8 +42,8 @@ def receive_pubsub():
         # ✅ 获取新增邮件 (msg_id, subject) 清单
         new_messages = detect_new_messages_only(history_id)  # 返回 List[Tuple[str, str]]
 
-        # ✅ 筛选关键词“对账”，并发送邮件通知（如匹配）
-        notify_if_subject_contains_keyword(new_messages, keyword="对账")
+        # ✅ 筛选关键词“骏都对帐表”，并发送邮件通知（如匹配）
+        notify_if_subject_contains_keyword(new_messages, keyword="骏都对帐表")
 
         return 'OK', 200
 
@@ -213,7 +213,7 @@ def notify_if_subject_contains_keyword(message_list: list, keyword: str):
     """
     筛选新邮件列表，若有主题包含关键词，则发送提醒邮件。
     :param message_list: List[Tuple[str, str]] or List[dict] - 每项为 (msg_id, subject) 或 {"id":..., "subject":...}
-    :param keyword: 要匹配的关键词（如“对账”）
+    :param keyword: 要匹配的关键词（如“骏都对帐表”）
     """
     try:
         # 统一转换为 (msg_id, subject) 格式
