@@ -15,8 +15,9 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 # === 配置项 ===
-ENABLE_EMAIL_SENDING = False  # 是否发送原始推送内容邮件
+ENABLE_EMAIL_SENDING = True  # 是否发送原始推送内容邮件
 ENABLE_NOTIFY_ON_LABEL = True  # 是否在标签添加后发送邮件通知
+TARGET_LABEL_NAME = "Label_264791441972079941"  # 要监控的标签
 
 
 @app.route('/', methods=['POST'])
@@ -67,7 +68,11 @@ def handle_pubsub_message(envelope: dict) -> dict:
         raise ValueError("⚠️ Pub/Sub 格式错误")
 
     data_b64 = envelope['message']['data']
-    decoded
+    decoded_str = base64.urlsafe_b64decode(data_b64).decode('utf-8')
+    decoded_json = json.loads(decoded_str)
+
+    logging.info(f"📨 解码后的消息内容：{decoded_json}")
+    return decoded_json
 
 
 # === 函数：转发原始消息内容（含发件逻辑） ===
