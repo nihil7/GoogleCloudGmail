@@ -20,7 +20,6 @@ ENABLE_EMAIL_SENDING = False              # 是否发送原始推送内容邮件
 ENABLE_NOTIFY_ON_LABEL = True           # 是否在标签添加后发送邮件通知
 TARGET_LABEL_NAME = "Label_264791441972079941"                 # 要监控的标签
 
-# === 主入口 ===
 @app.route('/', methods=['POST'])
 def receive_pubsub():
     """Flask 主入口：处理 Gmail 推送请求"""
@@ -37,15 +36,21 @@ def receive_pubsub():
 
         logging.info(f"📌 收到 historyId: {history_id}")
 
+        # ✅ 可选：转发原始 Pub/Sub 内容邮件
         forward_pubsub_message_email(decoded_json)
-        matched = detect_label_addition(history_id, TARGET_LABEL_NAME)
-        notify_if_label_matched(matched, TARGET_LABEL_NAME, history_id)
+
+        # ✅ 获取新增邮件 (msg_id, subject) 清单
+        new_messages = detect_new_messages_only(history_id)  # 返回 List[Tuple[str, str]]
+
+        # ✅ 筛选关键词“对账单”，并发送邮件通知（如匹配）
+        notify_if_subject_contains_keyword(new_messages, keyword="对账单")
 
         return 'OK', 200
 
     except Exception:
         logging.exception("❌ 程序异常")
         return 'Internal Server Error', 500
+
 
 # === 函数：解析 Pub/Sub 消息 ===
 def handle_pubsub_message(envelope: dict) -> dict:
@@ -143,13 +148,12 @@ def save_current_history_id(history_id: str):
         raise
 
 
-# === 函数：检测标签是否被添加 ===
-def detect_label_addition(current_history_id: str, target_label: str) -> bool:
-    """分析 Gmail history 是否有邮件被添加了指定标签，并记录变动日志"""
+def detect_new_messages_only(current_history_id: str):
+    """仅分析 Gmail 的新增邮件变动，打印邮件 ID 与主题"""
     try:
-        logging.info(f"🔍 正在分析标签变更（标签：{target_label}）")
+        logging.info("🔍 正在获取 Gmail 变动记录（仅筛选新增邮件）")
 
-        # === 读取查询起点 ===
+        # === 读取上一次 historyId ===
         start_id = read_previous_history_id()
 
         # === Secret 配置 ===
@@ -157,15 +161,17 @@ def detect_label_addition(current_history_id: str, target_label: str) -> bool:
         SECRET_NAME = "gmail_token_json"
         SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
+        # === 获取 Gmail 凭据 ===
         sm_client = secretmanager.SecretManagerServiceClient()
         name = f"projects/{PROJECT_ID}/secrets/{SECRET_NAME}/versions/latest"
         response = sm_client.access_secret_version(request={"name": name})
         token_data = json.loads(response.payload.data.decode("utf-8"))
         creds = Credentials.from_authorized_user_info(token_data, SCOPES)
 
+        # === 构建 Gmail 客户端 ===
         service = build('gmail', 'v1', credentials=creds)
 
-        # ✅ 查询变更记录
+        # ✅ 查询历史变更记录
         results = service.users().history().list(
             userId='me',
             startHistoryId=start_id
@@ -174,85 +180,83 @@ def detect_label_addition(current_history_id: str, target_label: str) -> bool:
         changes = results.get('history', [])
         logging.info(f"📌 共检测到 {len(changes)} 条变更记录")
 
-        found = False
+        new_message_ids = []
+
         for idx, change in enumerate(changes, 1):
-            useful = False
-            logging.info(f"📝 第 {idx} 条 history 变动详情: {json.dumps(change, ensure_ascii=False)}")
-
             if 'messagesAdded' in change:
-                useful = True
                 for m in change['messagesAdded']:
-                    logging.info(f"🟢 新增邮件 ID: {m['message']['id']}")
+                    msg_id = m['message']['id']
+                    new_message_ids.append(msg_id)
+                    logging.info(f"🟢 新增邮件 ID: {msg_id}")
 
-            if 'messagesDeleted' in change:
-                useful = True
-                for m in change['messagesDeleted']:
-                    logging.info(f"🔴 删除邮件 ID: {m['message']['id']}")
+                    # 获取主题
+                    try:
+                        msg = service.users().messages().get(
+                            userId='me', id=msg_id, format='metadata'
+                        ).execute()
+                        headers = msg.get('payload', {}).get('headers', [])
+                        subject = next((h['value'] for h in headers if h['name'].lower() == 'subject'), '[无主题]')
+                        logging.info(f"✉️ 邮件主题: {subject}")
+                    except Exception as e:
+                        logging.warning(f"⚠️ 获取邮件 {msg_id} 的主题失败：{e}")
 
-            if 'labelsAdded' in change:
-                useful = True
-                for m in change['labelsAdded']:
-                    labels = m.get('labelIds', [])
-                    logging.info(f"📌 加标签邮件 ID: {m['message']['id']} → {labels}")
-                    if target_label in labels:
-                        logging.info(f"✅ 匹配成功：添加了标签 {target_label}")
-                        found = True
-
-            if 'labelsRemoved' in change:
-                useful = True
-                for m in change['labelsRemoved']:
-                    labels = m.get('labelIds', [])
-                    logging.info(f"❌ 去标签邮件 ID: {m['message']['id']} → {labels}")
-
-            if not useful:
-                logging.info(f"🔍 第 {idx} 条记录无实际变更字段（跳过）")
-
-        # ✅ 处理完成后保存当前 historyId
+        # ✅ 保存当前 historyId 以供下次使用
         save_current_history_id(current_history_id)
-        logging.info(f"✅ 标签变更处理完成，是否匹配：{found}")
 
-        return found
+        logging.info(f"✅ 本轮共检测到 {len(new_message_ids)} 封新增邮件")
+        return new_message_ids
 
     except Exception:
-        logging.exception("❌ 查询变更记录失败")
-        return False
+        logging.exception("❌ 查询变动记录失败")
+        return []
 
-
-# === 函数：根据标签变更决定是否发送邮件通知 ===
-def notify_if_label_matched(matched: bool, label: str, history_id: str):
-    """根据匹配结果和开关配置决定是否发通知邮件"""
+def notify_if_subject_contains_keyword(message_list: list, keyword: str):
+    """
+    筛选新邮件列表，若有主题包含关键词，则发送提醒邮件。
+    :param message_list: List[Tuple[str, str]] - 每项为 (msg_id, subject)
+    :param keyword: 要匹配的关键词（如“对账单”）
+    """
     try:
-        if matched and ENABLE_NOTIFY_ON_LABEL:
-            subject = f"📌 标签 [{label}] 已添加"
-            body = f"收到 Gmail 推送，并发现有邮件添加了标签：{label}\n\n对应 historyId: {history_id}"
+        # 筛选匹配的邮件
+        matched = [(msg_id, subject) for msg_id, subject in message_list if keyword in subject]
 
-            sender_email = os.environ.get('EMAIL_ADDRESS_QQ')
-            sender_password = os.environ.get('EMAIL_PASSWORD_QQ')
-            receiver_email = os.environ.get('FORWARD_EMAIL')
+        if not matched:
+            logging.info(f"📭 未发现包含关键词“{keyword}”的邮件，跳过通知")
+            return
 
-            if not all([sender_email, sender_password, receiver_email]):
-                logging.warning("⚠️ 缺少邮件环境变量，跳过发送")
-                return
+        # 构造邮件正文
+        body_lines = [f"🔎 共检测到 {len(matched)} 封包含关键词“{keyword}”的邮件：\n"]
+        for idx, (msg_id, subject) in enumerate(matched, 1):
+            body_lines.append(f"{idx}. 📧 主题: {subject}\n   🆔 ID: {msg_id}")
+        body = "\n".join(body_lines)
 
-            message = MIMEText(body, 'plain', 'utf-8')
-            message['From'] = sender_email
-            message['To'] = receiver_email
-            message['Subject'] = subject
+        email_subject = f"📌 Gmail 新邮件提醒：包含“{keyword}”"
 
-            server = smtplib.SMTP_SSL('smtp.qq.com', 465)
-            server.login(sender_email, sender_password)
-            server.sendmail(sender_email, [receiver_email], message.as_string())
-            server.quit()
+        # 获取环境变量
+        sender_email = os.environ.get('EMAIL_ADDRESS_QQ')
+        sender_password = os.environ.get('EMAIL_PASSWORD_QQ')
+        receiver_email = os.environ.get('FORWARD_EMAIL')
 
-            logging.info("✅ 标签通知邮件已发送")
+        if not all([sender_email, sender_password, receiver_email]):
+            logging.warning("⚠️ 缺少邮件环境变量，跳过发送")
+            return
 
-        elif matched:
-            logging.info("☑️ 匹配标签，但邮件提醒已关闭")
-        else:
-            logging.info("📭 未发现匹配标签")
+        # 构造并发送邮件
+        message = MIMEText(body, 'plain', 'utf-8')
+        message['From'] = sender_email
+        message['To'] = receiver_email
+        message['Subject'] = email_subject
+
+        server = smtplib.SMTP_SSL('smtp.qq.com', 465)
+        server.login(sender_email, sender_password)
+        server.sendmail(sender_email, [receiver_email], message.as_string())
+        server.quit()
+
+        logging.info(f"✅ 邮件通知已发送，共匹配：{len(matched)} 封")
 
     except Exception as e:
-        logging.exception(f"❌ 标签通知邮件发送失败：{e}")
+        logging.exception(f"❌ 邮件提醒发送失败：{e}")
+
 
 
 # === 本地调试入口 ===
