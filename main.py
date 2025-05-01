@@ -7,7 +7,7 @@ from email_sender import send_email
 app = Flask(__name__)
 
 # 配置项
-ENABLE_EMAIL_SENDING = False       # 设置为 False 即跳过发邮件
+ENABLE_EMAIL_SENDING = True       # 设置为 False 即跳过发邮件
 TARGET_LABEL_NAME = "0"
 PRINT_LABEL_MAP = True
 
