@@ -15,7 +15,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 # === 配置项 ===
-ENABLE_EMAIL_SENDING = True  # 是否发送原始推送内容邮件
+ENABLE_EMAIL_SENDING = False  # 是否发送原始推送内容邮件
 ENABLE_NOTIFY_ON_LABEL = True  # 是否在标签添加后发送邮件通知
 
 
