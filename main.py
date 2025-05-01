@@ -43,7 +43,7 @@ def receive_pubsub():
         new_messages = detect_new_messages_only(history_id)  # 返回 List[Tuple[str, str]]
 
         # ✅ 筛选关键词“对账单”，并发送邮件通知（如匹配）
-        notify_if_subject_contains_keyword(new_messages, keyword="对账单")
+        notify_if_subject_contains_keyword(new_messages, keyword="对账")
 
         return 'OK', 200
 
