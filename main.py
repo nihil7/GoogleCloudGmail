@@ -9,47 +9,56 @@ from googleapiclient.discovery import build
 import smtplib
 from email.mime.text import MIMEText
 
-
 app = Flask(__name__)
 
 # === 日志配置 ===
 logging.basicConfig(level=logging.INFO)
 
 # === 配置项 ===
-ENABLE_EMAIL_SENDING = True              # 是否发送原始推送内容邮件
-ENABLE_NOTIFY_ON_LABEL = True           # 是否在标签添加后发送邮件通知
-TARGET_LABEL_NAME = "Label_264791441972079941"                 # 要监控的标签
+ENABLE_EMAIL_SENDING = True  # 是否发送原始推送内容邮件
+ENABLE_NOTIFY_ON_LABEL = True  # 是否在标签添加后发送邮件通知
+
 
 @app.route('/', methods=['POST'])
 def receive_pubsub():
     """Flask 主入口：处理 Gmail 推送请求"""
     try:
+        # 接收并解析 Pub/Sub 消息
         envelope = request.get_json()
+        if not envelope:
+            logging.warning("⚠️ 无法解析收到的 Pub/Sub 消息：空内容")
+            return 'Bad Request', 400
+
         decoded_json = handle_pubsub_message(envelope)
 
         history_id_raw = decoded_json.get("historyId")
         history_id = str(history_id_raw).strip()
 
+        # 校验 historyId 是否有效
         if not history_id.isdigit():
             logging.warning(f"⚠️ 收到无效 historyId：{history_id_raw}（原始类型 {type(history_id_raw).__name__}）")
             return 'OK', 200
 
-        logging.info(f"📌 收到 historyId: {history_id}")
+        logging.info(f"📌 收到有效 historyId: {history_id}")
 
-        # ✅ 可选：转发原始 Pub/Sub 内容邮件
-        forward_pubsub_message_email(decoded_json)
+        # 可选：转发原始 Pub/Sub 内容邮件
+        if ENABLE_EMAIL_SENDING:
+            forward_pubsub_message_email(decoded_json)
 
-        # ✅ 获取新增邮件 (msg_id, subject) 清单
+        # 获取新增邮件 (msg_id, subject) 清单
         new_messages = detect_new_messages_only(history_id)  # 返回 List[Tuple[str, str]]
 
-        # ✅ 筛选关键词“骏都对帐表”，并发送邮件通知（如匹配）
-        notify_if_subject_contains_keyword(new_messages, keyword="骏都对帐表")
+        # 筛选关键词“骏都对帐表”，并发送邮件通知（如匹配）
+        if ENABLE_NOTIFY_ON_LABEL:
+            notify_if_subject_contains_keyword(new_messages, keyword="骏都对帐表")
 
+        logging.info("✅ 成功处理 Gmail 推送消息")
         return 'OK', 200
 
-    except Exception:
-        logging.exception("❌ 程序异常")
+    except Exception as e:
+        logging.exception(f"❌ 程序异常: {e}")
         return 'Internal Server Error', 500
+
 
 # === 函数：解析 Pub/Sub 消息 ===
 def handle_pubsub_message(envelope: dict) -> dict:
@@ -58,11 +67,7 @@ def handle_pubsub_message(envelope: dict) -> dict:
         raise ValueError("⚠️ Pub/Sub 格式错误")
 
     data_b64 = envelope['message']['data']
-    decoded_str = base64.urlsafe_b64decode(data_b64).decode('utf-8')
-    decoded_json = json.loads(decoded_str)
-
-    logging.info(f"📨 解码后的消息内容：{decoded_json}")
-    return decoded_json
+    decoded
 
 
 # === 函数：转发原始消息内容（含发件逻辑） ===
