@@ -1,6 +1,5 @@
-Flask==2.0.2
-gunicorn==20.1.0
-google-api-python-client==2.30.0
-google-cloud-secret-manager==2.7.0
-google-auth==2.3.3
-oauth2client==3.0.0
+Flask
+gunicorn
+google-api-python-client
+google-cloud-secret-manager
+google-auth
