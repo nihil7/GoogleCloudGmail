@@ -113,6 +113,7 @@ def save_current_history_id(history_id: str):
     except Exception:
         logging.exception("❌ 保存 historyId 失败")
 
+
 # === 函数：检测标签是否被添加 ===
 def detect_label_addition(current_history_id: str, target_label: str) -> bool:
     """分析 Gmail history 是否有邮件被添加了指定标签，并记录变动日志"""
