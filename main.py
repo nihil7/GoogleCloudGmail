@@ -8,17 +8,15 @@ from google.cloud import secretmanager
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-
 app = Flask(__name__)
 
 # === 日志配置 ===
 logging.basicConfig(level=logging.INFO)
 
 # === 配置项 ===
-ENABLE_EMAIL_SENDING = True             # 是否发送原始推送内容邮件
+ENABLE_EMAIL_SENDING = True              # 是否发送原始推送内容邮件
 ENABLE_NOTIFY_ON_LABEL = True           # 是否在标签添加后发送邮件通知
-TARGET_LABEL_NAME = "0"             # 要监控的标签
-PRINT_LABEL_MAP = True                  # 保留调试项
+TARGET_LABEL_NAME = "0"                 # 要监控的标签
 
 # === 主入口 ===
 @app.route('/', methods=['POST'])
@@ -72,31 +70,75 @@ def forward_pubsub_message_email(decoded_json: dict):
             logging.exception("❌ 邮件发送失败")
     else:
         logging.info("🚫 邮件发送功能关闭，未调用 send_email()")
+
+# === 辅助函数：读取上一次 historyId ===
+def read_previous_history_id() -> str:
+    """从 Secret Manager 读取上一次成功处理的 historyId"""
+    PROJECT_ID = "pushgamiltogithub"
+    SECRET_NAME = "gmail_last_history_id"
+    previous_id = ""
+
+    try:
+        sm_client = secretmanager.SecretManagerServiceClient()
+        name = f"projects/{PROJECT_ID}/secrets/{SECRET_NAME}/versions/latest"
+        response = sm_client.access_secret_version(request={"name": name})
+        previous_id = response.payload.data.decode("utf-8")
+
+        if not previous_id or not previous_id.isdigit():
+            logging.warning(f"⚠️ 读取到的 historyId 非数字格式：{previous_id}")
+
+        logging.info(f"📖 读取上次 historyId：{previous_id}")
+        return previous_id
+
+    except Exception:
+        logging.exception("⚠️ 无法读取上次 historyId，将跳过处理")
+        raise
+
+# === 辅助函数：保存当前 historyId ===
+def save_current_history_id(history_id: str):
+    """将新的 historyId 写入 Secret Manager"""
+    try:
+        PROJECT_ID = "pushgamiltogithub"
+        SECRET_NAME = "gmail_last_history_id"
+        sm_client = secretmanager.SecretManagerServiceClient()
+
+        parent = f"projects/{PROJECT_ID}/secrets/{SECRET_NAME}"
+        sm_client.add_secret_version(
+            request={
+                "parent": parent,
+                "payload": {"data": history_id.encode("utf-8")}
+            }
+        )
+        logging.info(f"💾 已保存新的 historyId：{history_id}")
+    except Exception:
+        logging.exception("❌ 保存 historyId 失败")
+
 # === 函数：检测标签是否被添加 ===
-def detect_label_addition(history_id: str, target_label: str) -> bool:
-    """分析 Gmail history 是否有邮件被添加了指定标签"""
+def detect_label_addition(current_history_id: str, target_label: str) -> bool:
+    """分析 Gmail history 是否有邮件被添加了指定标签，并记录变动日志"""
     try:
         logging.info(f"🔍 正在分析标签变更（标签：{target_label}）")
+
+        # === 读取查询起点 ===
+        start_id = read_previous_history_id()
 
         # === Secret 配置 ===
         PROJECT_ID = "pushgamiltogithub"
         SECRET_NAME = "gmail_token_json"
         SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
-        # ✅ 从 Secret Manager 获取 token.json
         sm_client = secretmanager.SecretManagerServiceClient()
         name = f"projects/{PROJECT_ID}/secrets/{SECRET_NAME}/versions/latest"
         response = sm_client.access_secret_version(request={"name": name})
         token_data = json.loads(response.payload.data.decode("utf-8"))
         creds = Credentials.from_authorized_user_info(token_data, SCOPES)
 
-        # ✅ 构建 Gmail 客户端
         service = build('gmail', 'v1', credentials=creds)
 
         # ✅ 查询变更记录
         results = service.users().history().list(
             userId='me',
-            startHistoryId=history_id
+            startHistoryId=start_id
         ).execute()
 
         changes = results.get('history', [])
@@ -105,6 +147,7 @@ def detect_label_addition(history_id: str, target_label: str) -> bool:
         found = False
         for idx, change in enumerate(changes, 1):
             useful = False
+            logging.info(f"📝 第 {idx} 条 history 变动详情: {json.dumps(change, ensure_ascii=False)}")
 
             if 'messagesAdded' in change:
                 useful = True
@@ -134,6 +177,10 @@ def detect_label_addition(history_id: str, target_label: str) -> bool:
             if not useful:
                 logging.info(f"🔍 第 {idx} 条记录无实际变更字段（跳过）")
 
+        # ✅ 处理完成后保存当前 historyId
+        save_current_history_id(current_history_id)
+        logging.info(f"✅ 标签变更处理完成，是否匹配：{found}")
+
         return found
 
     except Exception:
@@ -156,7 +203,6 @@ def notify_if_label_matched(matched: bool, label: str, history_id: str):
 
     except Exception:
         logging.exception("❌ 标签通知邮件发送失败")
-
 
 # === 本地调试入口 ===
 if __name__ == '__main__':
