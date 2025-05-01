@@ -16,7 +16,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 # === 配置项 ===
-ENABLE_EMAIL_SENDING = False              # 是否发送原始推送内容邮件
+ENABLE_EMAIL_SENDING = True              # 是否发送原始推送内容邮件
 ENABLE_NOTIFY_ON_LABEL = True           # 是否在标签添加后发送邮件通知
 TARGET_LABEL_NAME = "Label_264791441972079941"                 # 要监控的标签
 
@@ -50,7 +50,6 @@ def receive_pubsub():
     except Exception:
         logging.exception("❌ 程序异常")
         return 'Internal Server Error', 500
-
 
 # === 函数：解析 Pub/Sub 消息 ===
 def handle_pubsub_message(envelope: dict) -> dict:
