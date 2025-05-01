@@ -54,6 +54,10 @@ def receive_pubsub():
             notify_if_subject_contains_keyword(new_messages, keyword="骏都对帐表")
 
         logging.info("✅ 成功处理 Gmail 推送消息")
+
+        # 在这里记录成功的 HTTP 响应
+        logging.info("📤 成功返回 200 OK")
+
         return 'OK', 200
 
     except Exception as e:
