@@ -26,9 +26,11 @@ def receive_pubsub():
         envelope = request.get_json()
         decoded_json = handle_pubsub_message(envelope)
 
-        history_id = decoded_json.get("historyId")
-        if not history_id:
-            logging.warning("⚠️ 未提供 historyId，跳过处理")
+        history_id_raw = decoded_json.get("historyId")
+        history_id = str(history_id_raw).strip()
+
+        if not history_id.isdigit():
+            logging.warning(f"⚠️ 收到无效 historyId：{history_id_raw}（原始类型 {type(history_id_raw).__name__}）")
             return 'OK', 200
 
         logging.info(f"📌 收到 historyId: {history_id}")
@@ -102,16 +104,22 @@ def save_current_history_id(history_id: str):
         SECRET_NAME = "gmail_last_history_id"
         sm_client = secretmanager.SecretManagerServiceClient()
 
+        # 防御性处理
+        history_id = str(history_id).strip()
+        if not history_id.isdigit():
+            raise ValueError(f"⚠️ 传入的 history_id 非纯数字：{history_id}")
+
+        payload_bytes = history_id.encode("utf-8")
         parent = f"projects/{PROJECT_ID}/secrets/{SECRET_NAME}"
         sm_client.add_secret_version(
-            request={
-                "parent": parent,
-                "payload": {"data": history_id.encode("utf-8")}
-            }
+            request={"parent": parent, "payload": {"data": payload_bytes}}
         )
+
         logging.info(f"💾 已保存新的 historyId：{history_id}")
+
     except Exception:
-        logging.exception("❌ 保存 historyId 失败")
+        logging.exception(f"❌ 保存 historyId 失败（值：{history_id}）")
+        raise
 
 
 # === 函数：检测标签是否被添加 ===
