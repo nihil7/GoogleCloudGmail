@@ -14,9 +14,9 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 # === 配置项 ===
-ENABLE_EMAIL_SENDING = True              # 是否发送原始推送内容邮件
+ENABLE_EMAIL_SENDING = False              # 是否发送原始推送内容邮件
 ENABLE_NOTIFY_ON_LABEL = True           # 是否在标签添加后发送邮件通知
-TARGET_LABEL_NAME = "0"                 # 要监控的标签
+TARGET_LABEL_NAME = "Label_264791441972079941"                 # 要监控的标签
 
 # === 主入口 ===
 @app.route('/', methods=['POST'])
