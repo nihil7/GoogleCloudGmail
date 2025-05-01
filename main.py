@@ -149,7 +149,7 @@ def save_current_history_id(history_id: str):
 
 
 def detect_new_messages_only(current_history_id: str):
-    """仅分析 Gmail 的新增邮件变动，打印邮件 ID 与主题"""
+    """仅分析 Gmail 的新增邮件变动，返回 [(msg_id, subject)] 列表"""
     try:
         logging.info("🔍 正在获取 Gmail 变动记录（仅筛选新增邮件）")
 
@@ -180,31 +180,30 @@ def detect_new_messages_only(current_history_id: str):
         changes = results.get('history', [])
         logging.info(f"📌 共检测到 {len(changes)} 条变更记录")
 
-        new_message_ids = []
+        message_info = []
 
         for idx, change in enumerate(changes, 1):
             if 'messagesAdded' in change:
                 for m in change['messagesAdded']:
                     msg_id = m['message']['id']
-                    new_message_ids.append(msg_id)
-                    logging.info(f"🟢 新增邮件 ID: {msg_id}")
-
-                    # 获取主题
                     try:
                         msg = service.users().messages().get(
                             userId='me', id=msg_id, format='metadata'
                         ).execute()
                         headers = msg.get('payload', {}).get('headers', [])
                         subject = next((h['value'] for h in headers if h['name'].lower() == 'subject'), '[无主题]')
-                        logging.info(f"✉️ 邮件主题: {subject}")
+
+                        logging.info(f"🆕 新邮件 ID: {msg_id}，主题: {subject}")
+                        message_info.append((msg_id, subject))  # ✅ 添加 (id, subject)
+
                     except Exception as e:
                         logging.warning(f"⚠️ 获取邮件 {msg_id} 的主题失败：{e}")
 
-        # ✅ 保存当前 historyId 以供下次使用
+        # ✅ 保存当前 historyId
         save_current_history_id(current_history_id)
 
-        logging.info(f"✅ 本轮共检测到 {len(new_message_ids)} 封新增邮件")
-        return new_message_ids
+        logging.info(f"✅ 本轮共检测到 {len(message_info)} 封新增邮件")
+        return message_info
 
     except Exception:
         logging.exception("❌ 查询变动记录失败")
