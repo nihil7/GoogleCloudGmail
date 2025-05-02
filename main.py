@@ -16,30 +16,32 @@ from googleapiclient.discovery import build
 
 
 app = Flask(__name__)
+
 # === 日志配置 ===
 logging.basicConfig(level=logging.INFO)
 
 # === 配置项 ===
-ENABLE_EMAIL_SENDING = True
-ENABLE_NOTIFY_ON_LABEL = True
-TARGET_LABEL_NAME = "Label_264791441972079941"
+ENABLE_EMAIL_SENDING = True  # 是否发送原始推送内容邮件
+ENABLE_NOTIFY_ON_LABEL = True  # 是否在标签添加后发送邮件通知
+TARGET_LABEL_NAME = "Label_264791441972079941"  # 要监控的标签
 
 @app.route('/', methods=['POST'])
 def receive_pubsub():
-    start_time = time.time()  # ✅ 加这行定义
+    start_time = time.time()
     envelope = request.get_json()
-    logging.info("📨 收到 Pub/Sub 消息：%s", envelope)
+    logging.info("\U0001f4e8 收到 Pub/Sub 消息：%s", envelope)
 
     t = threading.Thread(target=process_pubsub_message, args=(envelope,))
     t.daemon = True
     t.start()
 
-    elapsed_ms = round((time.time() - start_time) * 1000)  # ✅ 现在这个变量才有意义
-    logging.info(f"📤 已立即返回 200 OK（耗时 {elapsed_ms}ms）")
+    elapsed_ms = round((time.time() - start_time) * 1000)
+    logging.info(f"\U0001f4e4 已立即返回 200 OK（耗时 {elapsed_ms}ms）")
     return 'OK', 200
 
 
 def process_pubsub_message(envelope):
+    """异步处理 Gmail 推送消息"""
     start_time = time.time()
     try:
         decoded_json = handle_pubsub_message(envelope)
@@ -49,11 +51,12 @@ def process_pubsub_message(envelope):
 
         history_id_raw = decoded_json.get("historyId")
         history_id = str(history_id_raw).strip()
+
         if not history_id.isdigit():
-            logging.warning(f"⚠️ 无效 historyId：{history_id_raw}")
+            logging.warning(f"⚠️ 无效 historyId：{history_id_raw}（原始类型 {type(history_id_raw).__name__}）")
             return
 
-        logging.info(f"📌 异步处理中 historyId: {history_id}，线程ID: {threading.get_ident()}")
+        logging.info(f"📌 异步处理中 historyId: {history_id}")
 
         if ENABLE_EMAIL_SENDING:
             forward_pubsub_message_email(decoded_json)
@@ -69,7 +72,11 @@ def process_pubsub_message(envelope):
     except Exception as e:
         logging.exception(f"❌ 异步处理异常：{e}")
 
+
+
+# === 函数：解析 Pub/Sub 消息 ===
 def handle_pubsub_message(envelope: dict) -> dict:
+    """解析 Pub/Sub 推送消息，返回解码后的 JSON 数据"""
     if not envelope or 'message' not in envelope or 'data' not in envelope['message']:
         raise ValueError("⚠️ Pub/Sub 格式错误")
 
@@ -80,17 +87,25 @@ def handle_pubsub_message(envelope: dict) -> dict:
     logging.info(f"📨 解码后的消息内容：{decoded_json}")
     return decoded_json
 
+
+# === 函数：转发原始消息内容（含发件逻辑） ===
 def forward_pubsub_message_email(decoded_json: dict):
+    """将 Gmail 推送的原始 JSON 内容作为邮件正文发送"""
+
     content = json.dumps(decoded_json, ensure_ascii=False, indent=2)
     logging.info("📄 已准备邮件内容")
+
+    if not os.environ.get('EMAIL_ADDRESS_QQ') or not os.environ.get('EMAIL_PASSWORD_QQ') or not os.environ.get('FORWARD_EMAIL'):
+        logging.warning("⚠️ 缺少邮件环境变量，跳过发送")
+        return
+
+    if not ENABLE_EMAIL_SENDING:
+        logging.info("🚫 邮件发送功能关闭，未调用发送")
+        return
 
     sender_email = os.environ.get('EMAIL_ADDRESS_QQ')
     sender_password = os.environ.get('EMAIL_PASSWORD_QQ')
     receiver_email = os.environ.get('FORWARD_EMAIL')
-
-    if not all([sender_email, sender_password, receiver_email]):
-        logging.warning("⚠️ 缺少邮件环境变量，跳过发送")
-        return
 
     message = MIMEText(content, 'plain', 'utf-8')
     message['From'] = sender_email
@@ -98,9 +113,10 @@ def forward_pubsub_message_email(decoded_json: dict):
     message['Subject'] = "📬 Gmail 推送原始内容"
 
     try:
-        with smtplib.SMTP_SSL('smtp.qq.com', 465) as server:
-            server.login(sender_email, sender_password)
-            server.sendmail(sender_email, [receiver_email], message.as_string())
+        server = smtplib.SMTP_SSL('smtp.qq.com', 465)
+        server.login(sender_email, sender_password)
+        server.sendmail(sender_email, [receiver_email], message.as_string())
+        server.quit()
         logging.info("✅ 邮件已发送（原始推送）")
     except Exception as e:
         logging.exception(f"❌ 邮件发送失败：{e}")
