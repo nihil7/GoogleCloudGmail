@@ -25,6 +25,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 ENABLE_EMAIL_SENDING = True
 ENABLE_NOTIFY_ON_LABEL = True
 ENABLE_GITHUB_NOTIFY = True
+ENABLE_TRIGGER_GITHUB = True
 TARGET_LABEL_NAME = "Label_264791441972079941"
 GITHUB_REPO = "nihil7/MeidiAuto"
 GITHUB_WORKFLOW = "run-daily.yml"
@@ -54,6 +55,9 @@ def process_pubsub_message(envelope):
             logging.warning("⚠️ 解码失败")
             return
 
+        if ENABLE_EMAIL_SENDING:
+            forward_pubsub_message_email(decoded_json)
+
         history_id_raw = decoded_json.get("historyId")
         history_id = str(history_id_raw).strip()
         if not history_id.isdigit():
@@ -66,10 +70,11 @@ def process_pubsub_message(envelope):
 
         matched = find_messages_with_keyword(new_messages, keyword="骏都对帐表")
         if matched:
-            triggered, github_response = trigger_github_workflow()
-            if triggered:
-                if ENABLE_GITHUB_NOTIFY:
+            if ENABLE_TRIGGER_GITHUB:
+                triggered, github_response = trigger_github_workflow()
+                if triggered and ENABLE_GITHUB_NOTIFY:
                     send_github_trigger_email(github_response)
+            if ENABLE_NOTIFY_ON_LABEL:
                 send_keyword_notification(matched, keyword="骏都对帐表")
 
         elapsed = round(time.time() - start_time, 2)
@@ -77,7 +82,6 @@ def process_pubsub_message(envelope):
 
     except Exception as e:
         logging.exception(f"❌ 异步处理异常：{e}")
-
 
 
 # === 函数：解析 Pub/Sub 消息 ===
@@ -318,6 +322,7 @@ def trigger_github_workflow():
     except Exception as e:
         logging.exception("❌ GitHub 请求异常")
         return False, str(e)
+
 
 def send_github_trigger_email(response_text):
     try:
