@@ -1,14 +1,20 @@
-from flask import Flask, request
-import base64
-import json
+# === 标准库 ===
 import os
+import json
+import time
+import base64
 import logging
+import threading
+import smtplib
+from email.mime.text import MIMEText
+
+# === 第三方库 ===
+from flask import Flask, request
 from google.cloud import secretmanager
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-import smtplib
-from email.mime.text import MIMEText
-import time
+
+
 app = Flask(__name__)
 
 # === 日志配置 ===
@@ -18,30 +24,36 @@ logging.basicConfig(level=logging.INFO)
 ENABLE_EMAIL_SENDING = True  # 是否发送原始推送内容邮件
 ENABLE_NOTIFY_ON_LABEL = True  # 是否在标签添加后发送邮件通知
 TARGET_LABEL_NAME = "Label_264791441972079941"  # 要监控的标签
+
 @app.route('/', methods=['POST'])
 def receive_pubsub():
-    """Flask 主入口：处理 Gmail 推送请求"""
+    envelope = request.get_json()
+    logging.info("📨 收到 Pub/Sub 消息：%s", envelope)
+
+    # ✅ 启动线程（极快）
+    threading.Thread(target=process_pubsub_message, args=(envelope,)).start()
+
+    # ✅ 无论后续逻辑是否成功，立即返回
+    return 'OK', 200
+
+
+def process_pubsub_message(envelope):
+    """异步处理 Gmail 推送消息"""
     start_time = time.time()
-
     try:
-        envelope = request.get_json()
-        if not envelope:
-            logging.warning("⚠️ Pub/Sub 消息为空或格式错误")
-            return 'OK', 200  # ✅ 保底返回 200，避免重试
-
         decoded_json = handle_pubsub_message(envelope)
         if not decoded_json:
-            logging.warning("⚠️ 解码后的消息为空，跳过处理")
-            return 'OK', 200
+            logging.warning("⚠️ 解码失败")
+            return
 
         history_id_raw = decoded_json.get("historyId")
         history_id = str(history_id_raw).strip()
 
         if not history_id.isdigit():
             logging.warning(f"⚠️ 无效 historyId：{history_id_raw}（原始类型 {type(history_id_raw).__name__}）")
-            return 'OK', 200
+            return
 
-        logging.info(f"📌 收到有效 historyId: {history_id}")
+        logging.info(f"📌 异步处理中 historyId: {history_id}")
 
         if ENABLE_EMAIL_SENDING:
             forward_pubsub_message_email(decoded_json)
@@ -52,14 +64,12 @@ def receive_pubsub():
             notify_if_subject_contains_keyword(new_messages, keyword="骏都对帐表")
 
         elapsed = round(time.time() - start_time, 2)
-        logging.info(f"✅ 成功处理 Gmail 推送消息（耗时 {elapsed}s）")
-        logging.info("📤 成功返回 200 OK")
-        return 'OK', 200
+        logging.info(f"✅ 异步处理完成（耗时 {elapsed}s）")
 
     except Exception as e:
-        logging.exception(f"❌ 未捕获的异常，处理失败：{e}")
-        logging.warning("⚠️ 虽然程序异常，但仍返回 200 以避免 Pub/Sub 重发")
-        return 'OK', 200  # ✅ 始终返回 200，防止重复推送
+        logging.exception(f"❌ 异步处理异常：{e}")
+
+
 
 # === 函数：解析 Pub/Sub 消息 ===
 def handle_pubsub_message(envelope: dict) -> dict:
