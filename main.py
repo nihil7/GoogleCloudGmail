@@ -30,6 +30,7 @@ TARGET_LABEL_NAME = "Label_264791441972079941"
 GITHUB_REPO = "nihil7/MeidiAuto"
 GITHUB_WORKFLOW = "run-daily.yml"
 GITHUB_REF = "main"
+KEYWORDS = ["骏都对帐表"]
 
 @app.route('/', methods=['POST'])
 def receive_pubsub():
@@ -44,8 +45,6 @@ def receive_pubsub():
     elapsed_ms = round((time.time() - start_time) * 1000)
     logging.info(f"\U0001f4e4 已立即返回 200 OK（耗时 {elapsed_ms}ms）")
     return 'OK', 200
-
-
 
 def process_pubsub_message(envelope):
     start_time = time.time()
@@ -68,21 +67,22 @@ def process_pubsub_message(envelope):
 
         new_messages = detect_new_messages_only(history_id)
 
-        matched = find_messages_with_keyword(new_messages, keyword="骏都对帐表")
-        if matched:
-            if ENABLE_TRIGGER_GITHUB:
-                triggered, github_response = trigger_github_workflow()
-                if triggered and ENABLE_GITHUB_NOTIFY:
-                    send_github_trigger_email(github_response)
-            if ENABLE_NOTIFY_ON_LABEL:
-                send_keyword_notification(matched, keyword="骏都对帐表")
+        for keyword in KEYWORDS:
+            matched = find_messages_with_keyword(new_messages, keyword=keyword)
+            if matched:
+                if ENABLE_NOTIFY_ON_LABEL:
+                    send_keyword_notification(matched, keyword=keyword)
+                    time.sleep(1)  # 防止连续发信被拒绝
+                if ENABLE_TRIGGER_GITHUB:
+                    triggered, github_response = trigger_github_workflow()
+                    if triggered and ENABLE_GITHUB_NOTIFY:
+                        send_github_trigger_email(github_response)
 
         elapsed = round(time.time() - start_time, 2)
         logging.info(f"✅ 异步处理完成（耗时 {elapsed}s）")
 
     except Exception as e:
         logging.exception(f"❌ 异步处理异常：{e}")
-
 
 # === 函数：解析 Pub/Sub 消息 ===
 def handle_pubsub_message(envelope: dict) -> dict:
