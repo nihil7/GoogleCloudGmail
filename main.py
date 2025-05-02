@@ -72,12 +72,12 @@ def process_pubsub_message(envelope):
             if matched:
                 if ENABLE_NOTIFY_ON_LABEL:
                     send_keyword_notification(matched, keyword=keyword)
-                    time.sleep(1)  # 防止连续发信被拒绝
+                    time.sleep(2)  # 防止连续发信被拒绝
                 if ENABLE_TRIGGER_GITHUB:
                     triggered, github_response = trigger_github_workflow()
                     if triggered and ENABLE_GITHUB_NOTIFY:
                         send_github_trigger_email(github_response)
-
+                        time.sleep(2)  # 防止连续发信被拒绝
         elapsed = round(time.time() - start_time, 2)
         logging.info(f"✅ 异步处理完成（耗时 {elapsed}s）")
 
@@ -260,11 +260,16 @@ def find_messages_with_keyword(message_list: list, keyword: str):
             logging.info(f"📭 未发现包含关键词“{keyword}”的邮件")
             return []
 
+        logging.info(f"📬 找到 {len(matched)} 封包含关键词“{keyword}”的邮件：")
+        for msg_id, subject in matched:
+            logging.info(f"🧾 ID: {msg_id} | 主题: {subject}")
+
         return matched
 
     except Exception as e:
         logging.exception(f"❌ 查找关键词异常：{e}")
         return []
+
 
 def send_keyword_notification(matched: list, keyword: str):
     try:
