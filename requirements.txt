@@ -1,5 +1,7 @@
-Flask
-gunicorn
+flask
+requests
 google-api-python-client
-google-cloud-secret-manager
 google-auth
+google-auth-oauthlib
+google-cloud-secret-manager
+gunicorn

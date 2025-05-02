@@ -13,17 +13,22 @@ from flask import Flask, request
 from google.cloud import secretmanager
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+import requests
 
 
 app = Flask(__name__)
 
 # === 日志配置 ===
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 # === 配置项 ===
-ENABLE_EMAIL_SENDING = True  # 是否发送原始推送内容邮件
-ENABLE_NOTIFY_ON_LABEL = True  # 是否在标签添加后发送邮件通知
-TARGET_LABEL_NAME = "Label_264791441972079941"  # 要监控的标签
+ENABLE_EMAIL_SENDING = True
+ENABLE_NOTIFY_ON_LABEL = True
+ENABLE_GITHUB_NOTIFY = True
+TARGET_LABEL_NAME = "Label_264791441972079941"
+GITHUB_REPO = "nihil7/MeidiAuto"
+GITHUB_WORKFLOW = "run-daily.yml"
+GITHUB_REF = "main"
 
 @app.route('/', methods=['POST'])
 def receive_pubsub():
@@ -57,14 +62,14 @@ def process_pubsub_message(envelope):
 
         logging.info(f"📌 异步处理中 historyId: {history_id}，线程ID: {threading.get_ident()}")
 
-        if ENABLE_EMAIL_SENDING:
-            forward_pubsub_message_email(decoded_json)
-
         new_messages = detect_new_messages_only(history_id)
 
-        if ENABLE_NOTIFY_ON_LABEL:
-            matched = find_messages_with_keyword(new_messages, keyword="骏都对帐表")
-            if matched:
+        matched = find_messages_with_keyword(new_messages, keyword="骏都对帐表")
+        if matched:
+            triggered, github_response = trigger_github_workflow()
+            if triggered:
+                if ENABLE_GITHUB_NOTIFY:
+                    send_github_trigger_email(github_response)
                 send_keyword_notification(matched, keyword="骏都对帐表")
 
         elapsed = round(time.time() - start_time, 2)
@@ -290,6 +295,55 @@ def send_keyword_notification(matched: list, keyword: str):
 
     except Exception as e:
         logging.exception(f"❌ 邮件提醒发送失败：{e}")
+
+def trigger_github_workflow():
+    try:
+        token = os.environ.get("GITHUB_TOKEN")
+        if not token:
+            logging.error("❌ GitHub Token 缺失")
+            return False, "Missing GitHub Token"
+
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/{GITHUB_WORKFLOW}/dispatches"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+        payload = json.dumps({"ref": GITHUB_REF})
+
+        response = requests.post(url, headers=headers, data=payload)
+        logging.info(f"📡 GitHub 响应状态码: {response.status_code}")
+        logging.info(f"📦 GitHub 响应内容: {response.text}")
+
+        return response.status_code == 204, response.text
+    except Exception as e:
+        logging.exception("❌ GitHub 请求异常")
+        return False, str(e)
+
+def send_github_trigger_email(response_text):
+    try:
+        sender_email = os.environ.get('EMAIL_ADDRESS_QQ')
+        sender_password = os.environ.get('EMAIL_PASSWORD_QQ')
+        receiver_email = os.environ.get('FORWARD_EMAIL')
+
+        if not all([sender_email, sender_password, receiver_email]):
+            logging.warning("⚠️ 缺少邮件环境变量，跳过发送")
+            return
+
+        body = f"✅ GitHub 工作流已触发成功：{GITHUB_WORKFLOW}\n\n返回信息：\n{response_text}"
+        message = MIMEText(body, 'plain', 'utf-8')
+        message['From'] = sender_email
+        message['To'] = receiver_email
+        message['Subject'] = "✅ GitHub Actions 已触发通知"
+
+        server = smtplib.SMTP_SSL('smtp.qq.com', 465)
+        server.login(sender_email, sender_password)
+        server.sendmail(sender_email, [receiver_email], message.as_string())
+        server.quit()
+
+        logging.info("✉️ GitHub 触发通知邮件已发送")
+
+    except Exception as e:
+        logging.exception("❌ GitHub 通知邮件发送失败")
 
 
 # === 本地调试入口 ===
