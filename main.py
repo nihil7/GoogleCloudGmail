@@ -201,7 +201,7 @@ def detect_new_messages_only(current_history_id: str):
         creds = Credentials.from_authorized_user_info(token_data, SCOPES)
 
         # === 构建 Gmail 客户端 ===
-        service = build('gmail', 'v1', credentials=creds)
+        service = build('gmail', 'v1', credentials=creds, cache_discovery=False)
 
         # ✅ 查询历史变更记录
         results = service.users().history().list(
