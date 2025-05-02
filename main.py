@@ -40,8 +40,8 @@ def receive_pubsub():
     return 'OK', 200
 
 
+
 def process_pubsub_message(envelope):
-    """异步处理 Gmail 推送消息"""
     start_time = time.time()
     try:
         decoded_json = handle_pubsub_message(envelope)
@@ -51,12 +51,11 @@ def process_pubsub_message(envelope):
 
         history_id_raw = decoded_json.get("historyId")
         history_id = str(history_id_raw).strip()
-
         if not history_id.isdigit():
-            logging.warning(f"⚠️ 无效 historyId：{history_id_raw}（原始类型 {type(history_id_raw).__name__}）")
+            logging.warning(f"⚠️ 无效 historyId：{history_id_raw}")
             return
 
-        logging.info(f"📌 异步处理中 historyId: {history_id}")
+        logging.info(f"📌 异步处理中 historyId: {history_id}，线程ID: {threading.get_ident()}")
 
         if ENABLE_EMAIL_SENDING:
             forward_pubsub_message_email(decoded_json)
@@ -64,7 +63,9 @@ def process_pubsub_message(envelope):
         new_messages = detect_new_messages_only(history_id)
 
         if ENABLE_NOTIFY_ON_LABEL:
-            notify_if_subject_contains_keyword(new_messages, keyword="骏都对帐表")
+            matched = find_messages_with_keyword(new_messages, keyword="骏都对帐表")
+            if matched:
+                send_keyword_notification(matched, keyword="骏都对帐表")
 
         elapsed = round(time.time() - start_time, 2)
         logging.info(f"✅ 异步处理完成（耗时 {elapsed}s）")
@@ -230,15 +231,8 @@ def detect_new_messages_only(current_history_id: str):
     except Exception:
         logging.exception("❌ 查询变动记录失败")
         return []
-
-def notify_if_subject_contains_keyword(message_list: list, keyword: str):
-    """
-    筛选新邮件列表，若有主题包含关键词，则发送提醒邮件。
-    :param message_list: List[Tuple[str, str]] or List[dict] - 每项为 (msg_id, subject) 或 {"id":..., "subject":...}
-    :param keyword: 要匹配的关键词（如“骏都对帐表”）
-    """
+def find_messages_with_keyword(message_list: list, keyword: str):
     try:
-        # 统一转换为 (msg_id, subject) 格式
         normalized = []
         for item in message_list:
             if isinstance(item, dict):
@@ -251,21 +245,30 @@ def notify_if_subject_contains_keyword(message_list: list, keyword: str):
             else:
                 logging.warning(f"⚠️ 无法识别的消息项结构：{item}")
 
-        # 筛选匹配项
         matched = [(msg_id, subject) for msg_id, subject in normalized if keyword in subject]
 
         if not matched:
-            logging.info(f"📭 未发现包含关键词“{keyword}”的邮件，跳过通知")
+            logging.info(f"📭 未发现包含关键词“{keyword}”的邮件")
+            return []
+
+        return matched
+
+    except Exception as e:
+        logging.exception(f"❌ 查找关键词异常：{e}")
+        return []
+
+def send_keyword_notification(matched: list, keyword: str):
+    try:
+        if not ENABLE_EMAIL_SENDING:
+            logging.info("🚫 邮件发送功能关闭，未调用发送")
             return
 
-        # 构造邮件正文
         body_lines = [f"🔎 共检测到 {len(matched)} 封包含关键词“{keyword}”的邮件：\n"]
         for idx, (msg_id, subject) in enumerate(matched, 1):
             body_lines.append(f"{idx}. 📧 主题: {subject}\n   🆔 ID: {msg_id}")
         body = "\n".join(body_lines)
         email_subject = f"📌 Gmail 新邮件提醒：包含“{keyword}”"
 
-        # 获取环境变量
         sender_email = os.environ.get('EMAIL_ADDRESS_QQ')
         sender_password = os.environ.get('EMAIL_PASSWORD_QQ')
         receiver_email = os.environ.get('FORWARD_EMAIL')
@@ -274,23 +277,19 @@ def notify_if_subject_contains_keyword(message_list: list, keyword: str):
             logging.warning("⚠️ 缺少邮件环境变量，跳过发送")
             return
 
-        # 构造并发送邮件
         message = MIMEText(body, 'plain', 'utf-8')
         message['From'] = sender_email
         message['To'] = receiver_email
         message['Subject'] = email_subject
 
-        server = smtplib.SMTP_SSL('smtp.qq.com', 465)
-        server.login(sender_email, sender_password)
-        server.sendmail(sender_email, [receiver_email], message.as_string())
-        server.quit()
+        with smtplib.SMTP_SSL('smtp.qq.com', 465) as server:
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, [receiver_email], message.as_string())
 
         logging.info(f"✅ 邮件通知已发送，共匹配：{len(matched)} 封")
 
     except Exception as e:
         logging.exception(f"❌ 邮件提醒发送失败：{e}")
-
-
 
 
 # === 本地调试入口 ===
