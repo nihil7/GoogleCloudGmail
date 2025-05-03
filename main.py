@@ -325,11 +325,11 @@ def send_github_trigger_email(response_text):
             logging.warning("⚠️ 缺少邮件环境变量，跳过发送")
             return
 
-        body = f"✅ GitHub 工作流已触发成功：{GITHUB_WORKFLOW}\n\n返回信息：\n{response_text}"
+        body = f"✅ Google Cloud对GitHub 工作流已触发成功：{GITHUB_WORKFLOW}\n\n返回信息：\n{response_text}"
         message = MIMEText(body, 'plain', 'utf-8')
         message['From'] = sender_email
         message['To'] = receiver_email
-        message['Subject'] = "✅ GitHub Actions 已触发通知"
+        message['Subject'] = "✅ Google Cloud对GitHub Actions 已触发"
 
         server = smtplib.SMTP_SSL('smtp.qq.com', 465)
         server.login(sender_email, sender_password)
