@@ -144,7 +144,7 @@ def read_history_id_from_firestore() -> str:
         return value
     else:
         logging.warning("⚠️ Firestore 中未找到 historyId，正在初始化默认值 '0'")
-        doc_ref.set({"value": "0"})  # 自动初始化为起始值
+        doc_ref.set({"value": "50702"})  # 自动初始化为起始值
         return "0"
 
 
