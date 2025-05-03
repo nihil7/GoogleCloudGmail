@@ -13,6 +13,7 @@ from flask import Flask, request
 from google.cloud import secretmanager
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from google.cloud import firestore
 import requests
 
 
@@ -132,52 +133,29 @@ def forward_pubsub_message_email(decoded_json: dict):
         logging.exception(f"❌ 邮件发送失败：{e}")
 
 # === 辅助函数：读取上一次 historyId ===
-def read_previous_history_id() -> str:
-    """从 Secret Manager 读取上一次成功处理的 historyId"""
-    PROJECT_ID = "pushgamiltogithub"
-    SECRET_NAME = "gmail_last_history_id"
-    previous_id = ""
+def read_history_id_from_firestore() -> str:
+    db = firestore.Client()
+    doc_ref = db.collection("gmail_state").document("last_history_id")
+    doc = doc_ref.get()
 
-    try:
-        sm_client = secretmanager.SecretManagerServiceClient()
-        name = f"projects/{PROJECT_ID}/secrets/{SECRET_NAME}/versions/latest"
-        response = sm_client.access_secret_version(request={"name": name})
-        previous_id = response.payload.data.decode("utf-8")
+    if doc.exists:
+        value = doc.to_dict().get("value", "")
+        logging.info(f"📖 Firestore 读取到 historyId：{value}")
+        return value
+    else:
+        logging.warning("⚠️ Firestore 中未找到 historyId，正在初始化默认值 '0'")
+        doc_ref.set({"value": "0"})  # 自动初始化为起始值
+        return "0"
 
-        if not previous_id or not previous_id.isdigit():
-            logging.warning(f"⚠️ 读取到的 historyId 非数字格式：{previous_id}")
 
-        logging.info(f"📖 读取上次 historyId：{previous_id}")
-        return previous_id
-
-    except Exception:
-        logging.exception("⚠️ 无法读取上次 historyId，将跳过处理")
-        raise
 
 # === 辅助函数：保存当前 historyId ===
-def save_current_history_id(history_id: str):
-    """将新的 historyId 写入 Secret Manager"""
-    try:
-        PROJECT_ID = "pushgamiltogithub"
-        SECRET_NAME = "gmail_last_history_id"
-        sm_client = secretmanager.SecretManagerServiceClient()
+def save_history_id_to_firestore(history_id: str):
+    db = firestore.Client()
+    doc_ref = db.collection("gmail_state").document("last_history_id")
+    doc_ref.set({"value": history_id})
+    logging.info(f"✅ Firestore 已保存 historyId：{history_id}")
 
-        # 防御性处理
-        history_id = str(history_id).strip()
-        if not history_id.isdigit():
-            raise ValueError(f"⚠️ 传入的 history_id 非纯数字：{history_id}")
-
-        payload_bytes = history_id.encode("utf-8")
-        parent = f"projects/{PROJECT_ID}/secrets/{SECRET_NAME}"
-        sm_client.add_secret_version(
-            request={"parent": parent, "payload": {"data": payload_bytes}}
-        )
-
-        logging.info(f"💾 已保存新的 historyId：{history_id}")
-
-    except Exception:
-        logging.exception(f"❌ 保存 historyId 失败（值：{history_id}）")
-        raise
 
 
 def detect_new_messages_only(current_history_id: str):
@@ -186,7 +164,8 @@ def detect_new_messages_only(current_history_id: str):
         logging.info("🔍 正在获取 Gmail 变动记录（仅筛选新增未读邮件）")
 
         # === 读取上一次 historyId ===
-        start_id = read_previous_history_id()
+        # 替换后（改用 Firestore）
+        start_id = read_history_id_from_firestore()
 
         # === Secret 配置 ===
         PROJECT_ID = "pushgamiltogithub"
@@ -238,7 +217,7 @@ def detect_new_messages_only(current_history_id: str):
                         logging.warning(f"⚠️ 获取邮件 {msg_id} 的主题失败：{e}")
 
         # ✅ 保存当前 historyId
-        save_current_history_id(current_history_id)
+        save_history_id_to_firestore(current_history_id)
 
         logging.info(f"✅ 本轮共检测到 {len(message_info)} 封新增未读邮件")
         return message_info
