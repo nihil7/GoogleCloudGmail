@@ -64,6 +64,12 @@ def process_pubsub_message(envelope):
             logging.warning(f"⚠️ 无效 historyId：{history_id_raw}")
             return
 
+        last_history_id = read_history_id_from_firestore()
+
+        if int(history_id) <= int(last_history_id):
+            logging.warning(f"⚠️ 收到的 historyId（{history_id}）不大于已保存的（{last_history_id}），跳过本轮处理")
+            return
+
         logging.info(f"📌 异步处理中 historyId: {history_id}，线程ID: {threading.get_ident()}")
 
         new_messages = detect_new_messages_only(history_id)
@@ -325,11 +331,11 @@ def send_github_trigger_email(response_text):
             logging.warning("⚠️ 缺少邮件环境变量，跳过发送")
             return
 
-        body = f"✅ Google Cloud对GitHub 工作流已触发成功：{GITHUB_WORKFLOW}\n\n返回信息：\n{response_text}"
+        body = f"✅ Google Cloud已触发GitHub Actions工作流：{GITHUB_WORKFLOW}\n\n返回信息：\n{response_text}"
         message = MIMEText(body, 'plain', 'utf-8')
         message['From'] = sender_email
         message['To'] = receiver_email
-        message['Subject'] = "✅ Google Cloud对GitHub Actions 已触发"
+        message['Subject'] = "✅ Google Cloud已触发GitHub Actions"
 
         server = smtplib.SMTP_SSL('smtp.qq.com', 465)
         server.login(sender_email, sender_password)
