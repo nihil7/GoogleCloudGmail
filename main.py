@@ -23,7 +23,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 # === 配置项 ===
-ENABLE_EMAIL_SENDING = True
+ENABLE_EMAIL_SENDING = False
 ENABLE_NOTIFY_ON_LABEL = True
 ENABLE_GITHUB_NOTIFY = True
 ENABLE_TRIGGER_GITHUB = True
