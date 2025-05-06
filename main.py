@@ -265,7 +265,7 @@ def find_messages_with_keyword(message_list: list, keyword: str):
 
 def send_keyword_notification(matched: list, keyword: str):
     try:
-        if not ENABLE_EMAIL_SENDING:
+        if not ENABLE_NOTIFY_ON_LABEL:
             logging.info("🚫 邮件发送功能关闭，未调用发送")
             return
 
