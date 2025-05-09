@@ -7,6 +7,7 @@ import logging
 import threading
 import smtplib
 from email.mime.text import MIMEText
+from datetime import datetime
 
 # === 第三方库 ===
 from flask import Flask, request
@@ -356,7 +357,7 @@ def refresh_gmail_watch():
 
         PROJECT_ID = "pushgamiltogithub"
         SECRET_NAME = "gmail_token_json"
-        SCOPES = ['https://www.googleapis.com/auth/gmail.modify']  # 注意是 modify！
+        SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
 
         sm_client = secretmanager.SecretManagerServiceClient()
         name = f"projects/{PROJECT_ID}/secrets/{SECRET_NAME}/versions/latest"
@@ -377,50 +378,67 @@ def refresh_gmail_watch():
         logging.info(f"✅ Watch 刷新成功，有效期至: {expiration}")
         logging.info("📦 返回内容: %s", json.dumps(result, indent=2))
 
-        # ✅ 格式化打印过期时间
         if expiration:
-            from datetime import datetime
             expire_time = datetime.fromtimestamp(int(expiration) / 1000)
             logging.info(f"🕒 Watch 到期时间: {expire_time}")
+
         if expiration and os.environ.get("ENABLE_WATCH_REFRESH_EMAIL", "false").lower() == "true":
             send_watch_refresh_email(expiration)
+
         return "✅ Gmail Watch 刷新成功", 200
 
     except Exception as e:
         logging.exception("❌ Gmail Watch 刷新失败")
         return "❌ 刷新失败", 500
 
+
 def send_watch_refresh_email(expiration):
+    try:
+        expire_time = datetime.fromtimestamp(int(expiration) / 1000)
+        subject = "✅ Gmail Watch 已刷新（Cloud Run）"
+        body = f"""✅ Gmail Watch 已成功刷新
+
+🕒 到期时间（北京时间）：{expire_time.strftime('%Y-%m-%d %H:%M:%S')}
+
+⏰ 建议设置每日刷新，避免 Watch 到期失效。
+"""
+        send_email_via_qq(subject, body)
+
+    except Exception as e:
+        logging.exception("❌ Watch 刷新通知封装失败")
+
+
+def send_email_via_qq(subject: str, body: str) -> bool:
+    """
+    使用 QQ 邮箱发送邮件。需配置以下环境变量：
+    EMAIL_ADDRESS_QQ、EMAIL_PASSWORD_QQ、FORWARD_EMAIL
+    """
     try:
         sender_email = os.environ.get('EMAIL_ADDRESS_QQ')
         sender_password = os.environ.get('EMAIL_PASSWORD_QQ')
         receiver_email = os.environ.get('FORWARD_EMAIL')
 
         if not all([sender_email, sender_password, receiver_email]):
-            logging.warning("⚠️ 缺少邮件环境变量，跳过提醒")
-            return
-
-        from datetime import datetime
-        expire_time = datetime.fromtimestamp(int(expiration) / 1000)
-
-        body = f"""✅ Gmail Watch 已成功刷新
-
-🕒 到期时间（北京时间）：{expire_time.strftime('%Y-%m-%d %H:%M:%S')}
-
-⏰ 建议在 7 天前设置每日刷新，避免失效。
-"""
+            logging.warning("⚠️ 缺少邮件环境变量，跳过发信")
+            return False
 
         message = MIMEText(body, 'plain', 'utf-8')
         message['From'] = sender_email
         message['To'] = receiver_email
-        message['Subject'] = "✅ Gmail Watch 已刷新（Cloud Run）"
+        message['Subject'] = subject
 
-        server = smtplib.SMTP_SSL('smtp.qq.com', 465)
-        server.login(sender_email, sender_password)
-        server.sendmail(sender_email, [receiver_email], message.as_string())
-        server.quit()
-
-        logging.info("📧 Watch 刷新提醒邮件已发送")
+        try:
+            server = smtplib.SMTP_SSL('smtp.qq.com', 465, timeout=10)
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, [receiver_email], message.as_string())
+            server.quit()
+            logging.info("📧 邮件发送成功")
+            return True
+        except Exception as e:
+            logging.exception("❌ SMTP 邮件发送失败")
+            return False
 
     except Exception as e:
-        logging.exception("❌ Watch 刷新邮件发送失败")
+        logging.exception("❌ 邮件模块异常")
+        return False
+
