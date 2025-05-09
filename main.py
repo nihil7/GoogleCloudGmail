@@ -176,7 +176,8 @@ def detect_new_messages_only(current_history_id: str):
         # === Secret 配置 ===
         PROJECT_ID = "pushgamiltogithub"
         SECRET_NAME = "gmail_token_json"
-        SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+        SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
+
 
         # === 获取 Gmail 凭据 ===
         sm_client = secretmanager.SecretManagerServiceClient()
