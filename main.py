@@ -346,8 +346,43 @@ def send_github_trigger_email(response_text):
 
     except Exception as e:
         logging.exception("❌ GitHub 通知邮件发送失败")
+@app.route("/refresh_watch", methods=["GET"])
+def refresh_gmail_watch():
+    try:
+        logging.info("📡 正在刷新 Gmail Watch 设置...")
 
+        PROJECT_ID = "pushgamiltogithub"
+        SECRET_NAME = "gmail_token_json"
+        SCOPES = ['https://www.googleapis.com/auth/gmail.modify']  # 注意是 modify！
 
-# === 本地调试入口 ===
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
+        sm_client = secretmanager.SecretManagerServiceClient()
+        name = f"projects/{PROJECT_ID}/secrets/{SECRET_NAME}/versions/latest"
+        response = sm_client.access_secret_version(request={"name": name})
+        token_data = json.loads(response.payload.data.decode("utf-8"))
+        creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+
+        service = build('gmail', 'v1', credentials=creds, cache_discovery=False)
+
+        request_body = {
+            "topicName": "projects/pushgamiltogithub/topics/gmailtocloud"
+        }
+
+        logging.info("📤 Watch 请求体: %s", json.dumps(request_body, indent=2))
+
+        result = service.users().watch(userId='me', body=request_body).execute()
+        expiration = result.get("expiration")
+        logging.info(f"✅ Watch 刷新成功，有效期至: {expiration}")
+        logging.info("📦 返回内容: %s", json.dumps(result, indent=2))
+
+        # ✅ 格式化打印过期时间
+        if expiration:
+            from datetime import datetime
+            expire_time = datetime.fromtimestamp(int(expiration) / 1000)
+            logging.info(f"🕒 Watch 到期时间: {expire_time}")
+
+        return "✅ Gmail Watch 刷新成功", 200
+
+    except Exception as e:
+        logging.exception("❌ Gmail Watch 刷新失败")
+        return "❌ 刷新失败", 500
+
