@@ -27,6 +27,7 @@ ENABLE_EMAIL_SENDING = False
 ENABLE_NOTIFY_ON_LABEL = True
 ENABLE_GITHUB_NOTIFY = True
 ENABLE_TRIGGER_GITHUB = True
+ENABLE_WATCH_REFRESH_EMAIL=true
 TARGET_LABEL_NAME = "Label_264791441972079941"
 GITHUB_REPO = "nihil7/MeidiAuto"
 GITHUB_WORKFLOW = "run-daily.yml"
@@ -347,6 +348,7 @@ def send_github_trigger_email(response_text):
 
     except Exception as e:
         logging.exception("❌ GitHub 通知邮件发送失败")
+
 @app.route("/refresh_watch", methods=["GET"])
 def refresh_gmail_watch():
     try:
@@ -380,10 +382,45 @@ def refresh_gmail_watch():
             from datetime import datetime
             expire_time = datetime.fromtimestamp(int(expiration) / 1000)
             logging.info(f"🕒 Watch 到期时间: {expire_time}")
-
+        if expiration and os.environ.get("ENABLE_WATCH_REFRESH_EMAIL", "false").lower() == "true":
+            send_watch_refresh_email(expiration)
         return "✅ Gmail Watch 刷新成功", 200
 
     except Exception as e:
         logging.exception("❌ Gmail Watch 刷新失败")
         return "❌ 刷新失败", 500
 
+def send_watch_refresh_email(expiration):
+    try:
+        sender_email = os.environ.get('EMAIL_ADDRESS_QQ')
+        sender_password = os.environ.get('EMAIL_PASSWORD_QQ')
+        receiver_email = os.environ.get('FORWARD_EMAIL')
+
+        if not all([sender_email, sender_password, receiver_email]):
+            logging.warning("⚠️ 缺少邮件环境变量，跳过提醒")
+            return
+
+        from datetime import datetime
+        expire_time = datetime.fromtimestamp(int(expiration) / 1000)
+
+        body = f"""✅ Gmail Watch 已成功刷新
+
+🕒 到期时间（北京时间）：{expire_time.strftime('%Y-%m-%d %H:%M:%S')}
+
+⏰ 建议在 7 天前设置每日刷新，避免失效。
+"""
+
+        message = MIMEText(body, 'plain', 'utf-8')
+        message['From'] = sender_email
+        message['To'] = receiver_email
+        message['Subject'] = "✅ Gmail Watch 已刷新（Cloud Run）"
+
+        server = smtplib.SMTP_SSL('smtp.qq.com', 465)
+        server.login(sender_email, sender_password)
+        server.sendmail(sender_email, [receiver_email], message.as_string())
+        server.quit()
+
+        logging.info("📧 Watch 刷新提醒邮件已发送")
+
+    except Exception as e:
+        logging.exception("❌ Watch 刷新邮件发送失败")
