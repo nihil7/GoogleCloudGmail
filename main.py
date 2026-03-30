@@ -12,6 +12,8 @@ from datetime import datetime
 # === 第三方库 ===
 from flask import Flask, request
 from google.cloud import secretmanager
+from google.auth.exceptions import RefreshError
+from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from google.cloud import firestore
@@ -34,6 +36,25 @@ GITHUB_REPO = "nihil7/MeidiAuto"
 GITHUB_WORKFLOW = "run-daily.yml"
 GITHUB_REF = "main"
 KEYWORDS = ["骏都对帐表"]
+
+
+def load_gmail_service():
+    """从 Secret Manager 加载 Gmail token，并返回可用的 Gmail service。"""
+    project_id = "pushgamiltogithub"
+    secret_name = "gmail_token_json"
+    scopes = ['https://www.googleapis.com/auth/gmail.modify']
+
+    sm_client = secretmanager.SecretManagerServiceClient()
+    name = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
+    response = sm_client.access_secret_version(request={"name": name})
+    token_data = json.loads(response.payload.data.decode("utf-8"))
+    creds = Credentials.from_authorized_user_info(token_data, scopes)
+
+    # 提前刷新一次，便于在调用 Gmail API 前给出可读性更好的错误日志
+    if creds.expired or not creds.valid:
+        creds.refresh(Request())
+
+    return build('gmail', 'v1', credentials=creds, cache_discovery=False)
 
 @app.route('/', methods=['POST'])
 def receive_pubsub():
@@ -175,21 +196,8 @@ def detect_new_messages_only(current_history_id: str):
         # 替换后（改用 Firestore）
         start_id = read_history_id_from_firestore()
 
-        # === Secret 配置 ===
-        PROJECT_ID = "pushgamiltogithub"
-        SECRET_NAME = "gmail_token_json"
-        SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
-
-
-        # === 获取 Gmail 凭据 ===
-        sm_client = secretmanager.SecretManagerServiceClient()
-        name = f"projects/{PROJECT_ID}/secrets/{SECRET_NAME}/versions/latest"
-        response = sm_client.access_secret_version(request={"name": name})
-        token_data = json.loads(response.payload.data.decode("utf-8"))
-        creds = Credentials.from_authorized_user_info(token_data, SCOPES)
-
         # === 构建 Gmail 客户端 ===
-        service = build('gmail', 'v1', credentials=creds, cache_discovery=False)
+        service = load_gmail_service()
 
         # ✅ 查询历史变更记录
         results = service.users().history().list(
@@ -231,6 +239,12 @@ def detect_new_messages_only(current_history_id: str):
         logging.info(f"✅ 本轮共检测到 {len(message_info)} 封新增未读邮件")
         return message_info
 
+    except RefreshError:
+        logging.exception(
+            "❌ Gmail 授权失效（invalid_grant）。请重新执行 OAuth 授权并更新 Secret "
+            "projects/pushgamiltogithub/secrets/gmail_token_json。"
+        )
+        return []
     except Exception:
         logging.exception("❌ 查询变动记录失败")
         return []
@@ -354,18 +368,7 @@ def send_github_trigger_email(response_text):
 def refresh_gmail_watch():
     try:
         logging.info("📡 正在刷新 Gmail Watch 设置...")
-
-        PROJECT_ID = "pushgamiltogithub"
-        SECRET_NAME = "gmail_token_json"
-        SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
-
-        sm_client = secretmanager.SecretManagerServiceClient()
-        name = f"projects/{PROJECT_ID}/secrets/{SECRET_NAME}/versions/latest"
-        response = sm_client.access_secret_version(request={"name": name})
-        token_data = json.loads(response.payload.data.decode("utf-8"))
-        creds = Credentials.from_authorized_user_info(token_data, SCOPES)
-
-        service = build('gmail', 'v1', credentials=creds, cache_discovery=False)
+        service = load_gmail_service()
 
         request_body = {
             "topicName": "projects/pushgamiltogithub/topics/gmailtocloud"
@@ -387,6 +390,11 @@ def refresh_gmail_watch():
 
         return "✅ Gmail Watch 刷新成功", 200
 
+    except RefreshError:
+        logging.exception(
+            "❌ Gmail Watch 刷新失败：授权已失效（invalid_grant）。请重新授权并更新 Secret。"
+        )
+        return "❌ 刷新失败：Gmail 授权失效，请更新 token", 500
     except Exception as e:
         logging.exception("❌ Gmail Watch 刷新失败")
         return "❌ 刷新失败", 500
@@ -441,4 +449,3 @@ def send_email_via_qq(subject: str, body: str) -> bool:
     except Exception as e:
         logging.exception("❌ 邮件模块异常")
         return False
-
