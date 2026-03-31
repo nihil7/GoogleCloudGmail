@@ -12,6 +12,8 @@ from datetime import datetime
 # === 第三方库 ===
 from flask import Flask, request
 from google.cloud import secretmanager
+from google.auth.exceptions import RefreshError
+from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from google.cloud import firestore
@@ -24,6 +26,14 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 # === 配置项 ===
+APP_ENV = os.environ.get("APP_ENV", "cloud").lower()  # cloud | local
+GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "pushgamiltogithub")
+GMAIL_TOKEN_SECRET = os.environ.get("GMAIL_TOKEN_SECRET", "gmail_token_json")
+GMAIL_TOKEN_FILE = os.environ.get("GMAIL_TOKEN_FILE", "secrets/gmail_token.json")
+STATE_BACKEND = os.environ.get("STATE_BACKEND", "firestore" if APP_ENV == "cloud" else "file").lower()  # firestore | file
+LOCAL_STATE_FILE = os.environ.get("LOCAL_STATE_FILE", "data/last_history_id.json")
+DEFAULT_HISTORY_ID = os.environ.get("DEFAULT_HISTORY_ID", "50702")
+
 ENABLE_EMAIL_SENDING = False
 ENABLE_NOTIFY_ON_LABEL = True
 ENABLE_GITHUB_NOTIFY = True
@@ -34,6 +44,39 @@ GITHUB_REPO = "nihil7/MeidiAuto"
 GITHUB_WORKFLOW = "run-daily.yml"
 GITHUB_REF = "main"
 KEYWORDS = ["骏都对帐表"]
+WATCH_TOPIC_NAME = os.environ.get("WATCH_TOPIC_NAME", f"projects/{GCP_PROJECT_ID}/topics/gmailtocloud")
+
+
+def _ensure_parent_dir(file_path: str):
+    parent = os.path.dirname(file_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+
+def load_token_data() -> dict:
+    """根据运行模式读取 Gmail token json。"""
+    if APP_ENV == "local":
+        with open(GMAIL_TOKEN_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    sm_client = secretmanager.SecretManagerServiceClient()
+    name = f"projects/{GCP_PROJECT_ID}/secrets/{GMAIL_TOKEN_SECRET}/versions/latest"
+    response = sm_client.access_secret_version(request={"name": name})
+    return json.loads(response.payload.data.decode("utf-8"))
+
+
+def load_gmail_service():
+    """从 Secret Manager 加载 Gmail token，并返回可用的 Gmail service。"""
+    scopes = ['https://www.googleapis.com/auth/gmail.modify']
+
+    token_data = load_token_data()
+    creds = Credentials.from_authorized_user_info(token_data, scopes)
+
+    # 提前刷新一次，便于在调用 Gmail API 前给出可读性更好的错误日志
+    if creds.expired or not creds.valid:
+        creds.refresh(Request())
+
+    return build('gmail', 'v1', credentials=creds, cache_discovery=False)
 
 @app.route('/', methods=['POST'])
 def receive_pubsub():
@@ -142,6 +185,20 @@ def forward_pubsub_message_email(decoded_json: dict):
 
 # === 辅助函数：读取上一次 historyId ===
 def read_history_id_from_firestore() -> str:
+    if STATE_BACKEND == "file":
+        if not os.path.exists(LOCAL_STATE_FILE):
+            logging.warning(f"⚠️ 本地 historyId 文件不存在，初始化：{LOCAL_STATE_FILE}")
+            _ensure_parent_dir(LOCAL_STATE_FILE)
+            with open(LOCAL_STATE_FILE, "w", encoding="utf-8") as f:
+                json.dump({"value": DEFAULT_HISTORY_ID}, f, ensure_ascii=False)
+            return "0"
+
+        with open(LOCAL_STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        value = str(data.get("value", "0"))
+        logging.info(f"📖 本地文件读取到 historyId：{value}")
+        return value
+
     db = firestore.Client()
     doc_ref = db.collection("gmail_state").document("last_history_id")
     doc = doc_ref.get()
@@ -150,15 +207,22 @@ def read_history_id_from_firestore() -> str:
         value = doc.to_dict().get("value", "")
         logging.info(f"📖 Firestore 读取到 historyId：{value}")
         return value
-    else:
-        logging.warning("⚠️ Firestore 中未找到 historyId，正在初始化默认值 '0'")
-        doc_ref.set({"value": "50702"})  # 自动初始化为起始值
-        return "0"
+
+    logging.warning("⚠️ Firestore 中未找到 historyId，正在初始化默认值 '0'")
+    doc_ref.set({"value": DEFAULT_HISTORY_ID})
+    return "0"
 
 
 
 # === 辅助函数：保存当前 historyId ===
 def save_history_id_to_firestore(history_id: str):
+    if STATE_BACKEND == "file":
+        _ensure_parent_dir(LOCAL_STATE_FILE)
+        with open(LOCAL_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"value": history_id}, f, ensure_ascii=False)
+        logging.info(f"✅ 本地文件已保存 historyId：{history_id}")
+        return
+
     db = firestore.Client()
     doc_ref = db.collection("gmail_state").document("last_history_id")
     doc_ref.set({"value": history_id})
@@ -175,21 +239,8 @@ def detect_new_messages_only(current_history_id: str):
         # 替换后（改用 Firestore）
         start_id = read_history_id_from_firestore()
 
-        # === Secret 配置 ===
-        PROJECT_ID = "pushgamiltogithub"
-        SECRET_NAME = "gmail_token_json"
-        SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
-
-
-        # === 获取 Gmail 凭据 ===
-        sm_client = secretmanager.SecretManagerServiceClient()
-        name = f"projects/{PROJECT_ID}/secrets/{SECRET_NAME}/versions/latest"
-        response = sm_client.access_secret_version(request={"name": name})
-        token_data = json.loads(response.payload.data.decode("utf-8"))
-        creds = Credentials.from_authorized_user_info(token_data, SCOPES)
-
         # === 构建 Gmail 客户端 ===
-        service = build('gmail', 'v1', credentials=creds, cache_discovery=False)
+        service = load_gmail_service()
 
         # ✅ 查询历史变更记录
         results = service.users().history().list(
@@ -231,6 +282,12 @@ def detect_new_messages_only(current_history_id: str):
         logging.info(f"✅ 本轮共检测到 {len(message_info)} 封新增未读邮件")
         return message_info
 
+    except RefreshError:
+        logging.exception(
+            "❌ Gmail 授权失效（invalid_grant）。请重新执行 OAuth 授权并更新 Secret "
+            f"projects/{GCP_PROJECT_ID}/secrets/{GMAIL_TOKEN_SECRET}。"
+        )
+        return []
     except Exception:
         logging.exception("❌ 查询变动记录失败")
         return []
@@ -354,21 +411,10 @@ def send_github_trigger_email(response_text):
 def refresh_gmail_watch():
     try:
         logging.info("📡 正在刷新 Gmail Watch 设置...")
-
-        PROJECT_ID = "pushgamiltogithub"
-        SECRET_NAME = "gmail_token_json"
-        SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
-
-        sm_client = secretmanager.SecretManagerServiceClient()
-        name = f"projects/{PROJECT_ID}/secrets/{SECRET_NAME}/versions/latest"
-        response = sm_client.access_secret_version(request={"name": name})
-        token_data = json.loads(response.payload.data.decode("utf-8"))
-        creds = Credentials.from_authorized_user_info(token_data, SCOPES)
-
-        service = build('gmail', 'v1', credentials=creds, cache_discovery=False)
+        service = load_gmail_service()
 
         request_body = {
-            "topicName": "projects/pushgamiltogithub/topics/gmailtocloud"
+            "topicName": WATCH_TOPIC_NAME
         }
 
         logging.info("📤 Watch 请求体: %s", json.dumps(request_body, indent=2))
@@ -387,6 +433,11 @@ def refresh_gmail_watch():
 
         return "✅ Gmail Watch 刷新成功", 200
 
+    except RefreshError:
+        logging.exception(
+            "❌ Gmail Watch 刷新失败：授权已失效（invalid_grant）。请重新授权并更新 Secret。"
+        )
+        return "❌ 刷新失败：Gmail 授权失效，请更新 token", 500
     except Exception as e:
         logging.exception("❌ Gmail Watch 刷新失败")
         return "❌ 刷新失败", 500
@@ -441,4 +492,3 @@ def send_email_via_qq(subject: str, body: str) -> bool:
     except Exception as e:
         logging.exception("❌ 邮件模块异常")
         return False
-
