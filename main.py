@@ -78,25 +78,6 @@ def load_gmail_service():
 
     return build('gmail', 'v1', credentials=creds, cache_discovery=False)
 
-
-def load_gmail_service():
-    """从 Secret Manager 加载 Gmail token，并返回可用的 Gmail service。"""
-    project_id = "pushgamiltogithub"
-    secret_name = "gmail_token_json"
-    scopes = ['https://www.googleapis.com/auth/gmail.modify']
-
-    sm_client = secretmanager.SecretManagerServiceClient()
-    name = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
-    response = sm_client.access_secret_version(request={"name": name})
-    token_data = json.loads(response.payload.data.decode("utf-8"))
-    creds = Credentials.from_authorized_user_info(token_data, scopes)
-
-    # 提前刷新一次，便于在调用 Gmail API 前给出可读性更好的错误日志
-    if creds.expired or not creds.valid:
-        creds.refresh(Request())
-
-    return build('gmail', 'v1', credentials=creds, cache_discovery=False)
-
 @app.route('/', methods=['POST'])
 def receive_pubsub():
     start_time = time.time()
