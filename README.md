@@ -60,9 +60,40 @@ gcloud secrets versions add gmail_token_json --project=pushgamiltogithub --data-
 | dispatch 返回 404 | `GITHUB_REPO` 与实际仓库不符（改名/转移后没同步），或 token 权限不足 |
 | 重复处理同一封 | Firestore 里的 `historyId` 状态异常 |
 
-## 待定位
+## 生产部署（2026-09-08 用 gcloud 实测定位）
 
-本机没有这个服务的部署记录，仓库里也没有 workflow 或 `cloudbuild.yaml`。以下需要 `gcloud` 登录后确认并补进本文：Cloud Run 服务名与区域、部署方式（Console 手工 / `--source` / Cloud Build 触发器）、Pub/Sub 推送订阅指向的 URL、`/refresh_watch` 由谁周期性调用。
+| 项 | 值 |
+|---|---|
+| GCP 项目 | `pushgamiltogithub` |
+| Cloud Run 服务 | `googlecloudgmails`，区域 **asia-east2** |
+| 服务 URL | `https://googlecloudgmails-248281792263.asia-east2.run.app` |
+| 当前 revision | `googlecloudgmails-00074-5rg`（2026-04-19 部署） |
+| 镜像 | `asia-east2-docker.pkg.dev/pushgamiltogithub/cloud-run-source-deploy/googlecloudgmail/googlecloudgmails:<commit sha>` |
+| Pub/Sub | topic `gmailtocloud` → 推送订阅 `gmailtocloud-sub` → 上面那个服务 URL |
+| Secret Manager | `gmail_token_json`、`gmail_credentials`、`gmail-service-account` |
+| watch 续期 | Cloud Scheduler `refresh-gmail-watch` @ asia-east2，`0 18 * * *`（UTC，即北京 02:00），ENABLED |
+
+### 部署方式：Cloud Build 触发器，**push main 即自动构建并部署**
+
+触发器 `rmgpgab-googlecloudgmails-asia-east2-nihil7-GoogleCloudGmailsox` 绑定 GitHub 仓库，镜像 tag 就是被构建的 commit sha——判断生产跑的是哪份代码，把 revision 的镜像 tag 和 `git log` 对一下即可（当前 `c5d3c46` = main 的 HEAD）。
+
+⚠️ **仓库转移或改名会打断这个触发器**，它绑定的是原 owner/repo。转移后必须重建触发器，否则此后 push 不再部署，而且**不会有任何报错**——表现为「改了代码但线上行为没变」。
+
+### 生产环境变量
+
+Cloud Run 上配置了 `EMAIL_ADDRESS_QQ`、`EMAIL_PASSWORD_QQ`、`FORWARD_EMAIL`、`GITHUB_TOKEN`、`ENABLE_WATCH_REFRESH_EMAIL`，以及 `gmail_credentials` / `gmail_token_json` 两个 secret 引用。
+
+⚠️ 这里的 `GITHUB_TOKEN` 是**唯一在用的那份**。本机两份 `.env` 里的同名值都已失效（实测 `GET /user` 返回 401），不要拿它们去排查 dispatch 问题。
+
+### 只读取证命令
+
+```bash
+gcloud run services describe googlecloudgmails --region=asia-east2
+gcloud run revisions list --service=googlecloudgmails --region=asia-east2
+gcloud pubsub subscriptions list
+gcloud scheduler jobs list --location=asia-east2
+gcloud builds triggers list
+```
 
 ## 本地运行
 
