@@ -21,7 +21,7 @@ Gmail 收到邮件
 |---|---|---|
 | `KEYWORDS` | `["骏都对帐表"]` | 匹配到才触发下游 |
 | `TARGET_LABEL_NAME` | `Label_264791441972079941` | 命中后打的 Gmail 标签 |
-| `GITHUB_REPO` | `nihil7/MeidiAuto` | ⚠️ **硬编码**，仓库改名或转移后必须同步改这里并重新部署 |
+| `GITHUB_REPO` | `huozao/meidi-auto` | ⚠️ **硬编码**，仓库改名或转移后必须同步改这里并重新部署（2026-09-08 从 `nihil7/MeidiAuto` 改过来一次） |
 | `GITHUB_WORKFLOW` | `run-daily.yml` | dispatch 目标工作流 |
 | `ENABLE_EMAIL_SENDING` | `False` | 转发原始 Pub/Sub 消息的调试开关，默认关 |
 
@@ -75,15 +75,26 @@ gcloud secrets versions add gmail_token_json --project=pushgamiltogithub --data-
 
 ### 部署方式：Cloud Build 触发器，**push main 即自动构建并部署**
 
-触发器 `rmgpgab-googlecloudgmails-asia-east2-nihil7-GoogleCloudGmailsox` 绑定 GitHub 仓库，镜像 tag 就是被构建的 commit sha——判断生产跑的是哪份代码，把 revision 的镜像 tag 和 `git log` 对一下即可（当前 `c5d3c46` = main 的 HEAD）。
+触发器 `gmail-watcher-deploy-main`（global）绑定 `huozao/gmail-watcher`，镜像 tag 就是被构建的 commit sha——判断生产跑的是哪份代码，把 revision 的镜像 tag 和 `git log` 对一下即可（不写死具体 sha，它每次部署都变）。
 
-⚠️ **仓库转移或改名会打断这个触发器**，它绑定的是原 owner/repo。转移后必须重建触发器，否则此后 push 不再部署，而且**不会有任何报错**——表现为「改了代码但线上行为没变」。
+⚠️ **仓库转移或改名会打断这个触发器**，它绑定的是原 owner/repo。转移后必须重建，否则此后 push 不再部署，而且**不会有任何报错**——表现为「改了代码但线上行为没变」。
+
+2026-09-08 从 `nihil7/GoogleCloudGmail` 转到 `huozao/gmail-watcher` 时实际走的路径，留作下次参考：
+
+1. GitHub 侧把 Cloud Build App 装到新 owner（网页）
+2. Cloud Build 侧「Connect repository」建立仓库映射（**网页专属**，region 要选 `global`，和旧触发器一致）。少这一步 `gcloud builds triggers import` 会报 `FAILED_PRECONDITION: Repository mapping does not exist`
+3. `gcloud builds triggers describe` 导出旧触发器 JSON → 改 `github.owner`/`github.name`/`name`、删掉 `id`/`createTime`/`resourceName` 和 `substitutions._TRIGGER_ID` → `gcloud builds triggers import`
+4. 删掉指向旧路径的触发器
+
+注意 `gcloud builds triggers` **没有 `export` 子命令**，只能从 `describe --format=json` 构造。
 
 ### 生产环境变量
 
 Cloud Run 上配置了 `EMAIL_ADDRESS_QQ`、`EMAIL_PASSWORD_QQ`、`FORWARD_EMAIL`、`GITHUB_TOKEN`、`ENABLE_WATCH_REFRESH_EMAIL`，以及 `gmail_credentials` / `gmail_token_json` 两个 secret 引用。
 
-⚠️ 这里的 `GITHUB_TOKEN` 是**唯一在用的那份**。本机两份 `.env` 里的同名值都已失效（实测 `GET /user` 返回 401），不要拿它们去排查 dispatch 问题。
+⚠️ `GITHUB_TOKEN` 是**细粒度 PAT，绑定 resource owner**——2026-09-08 转移时实测：转移前那份的 owner 是 `nihil7`，仓库一归 `huozao`，它对 `huozao/meidi-auto` 立刻变 403，dispatch 必断。当前用的是 resource owner 为 `huozao` 的新 PAT。
+
+判据要选对：这类 token 对**公开仓库**返回 200 不能证明有权限（谁都读得到）。要验就拿一个**私有**仓去试，例如 `GET /repos/huozao/infra` 返回 200 才说明它对该组织有实质权限。
 
 ### 只读取证命令
 
