@@ -40,7 +40,7 @@ ENABLE_GITHUB_NOTIFY = True
 ENABLE_TRIGGER_GITHUB = True
 ENABLE_WATCH_REFRESH_EMAIL = os.environ.get("ENABLE_WATCH_REFRESH_EMAIL", "false").lower() == "true"
 TARGET_LABEL_NAME = "Label_264791441972079941"
-GITHUB_REPO = "nihil7/MeidiAuto"
+GITHUB_REPO = "huozao/meidi-auto"
 GITHUB_WORKFLOW = "run-daily.yml"
 GITHUB_REF = "main"
 KEYWORDS = ["骏都对帐表"]
